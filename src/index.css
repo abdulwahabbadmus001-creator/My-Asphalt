@@ -1,0 +1,86 @@
+@import "tailwindcss";
+
+@layer base {
+  html,
+  body,
+  #root {
+    width: 100vw;
+    height: 100vh;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    background-color: #080c16;
+    color: #f1f5f9;
+    font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+}
+
+.font-display {
+  font-family: "Bahnschrift", "DIN Alternate", "Arial Narrow", "Trebuchet MS", ui-sans-serif, system-ui, sans-serif;
+  letter-spacing: 0.04em;
+}
+
+.font-telemetry {
+  font-family: ui-monospace, "SFMono-Regular", "Cascadia Mono", "Consolas", "Liberation Mono", monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+.hud-text-shadow {
+  text-shadow: 0 2px 10px rgba(0, 0, 0, 0.9), 0 0 3px rgba(0, 0, 0, 0.95);
+}
+
+/* Procedural carbon-fiber weave surface for skewed Asphalt-style HUD & UI panels (zero external images, zero backdrop-filter) */
+.carbon-panel {
+  background-color: rgba(11, 16, 28, 0.92);
+  background-image:
+    repeating-linear-gradient(
+      45deg,
+      rgba(255, 255, 255, 0.025) 0px,
+      rgba(255, 255, 255, 0.025) 2px,
+      transparent 2px,
+      transparent 6px
+    ),
+    repeating-linear-gradient(
+      -45deg,
+      rgba(255, 255, 255, 0.02) 0px,
+      rgba(255, 255, 255, 0.02) 2px,
+      transparent 2px,
+      transparent 6px
+    );
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45);
+}
+
+.carbon-skew {
+  transform: skewX(-8deg);
+}
+
+.carbon-unskew {
+  transform: skewX(8deg);
+}
+
+@keyframes stuntPop {
+  0% {
+    opacity: 0;
+    transform: translateY(14px) scale(0.86);
+  }
+  18% {
+    opacity: 1;
+    transform: translateY(0) scale(1.04);
+  }
+  80% {
+    opacity: 1;
+    transform: translateY(-6px) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-20px) scale(0.95);
+  }
+}
+
+.animate-stunt-pop {
+  animation: stuntPop 1.6s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}

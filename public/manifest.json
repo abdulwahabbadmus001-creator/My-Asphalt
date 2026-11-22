@@ -1,0 +1,39 @@
+{
+  "id": "/",
+  "name": "My Asphalt",
+  "short_name": "My Asphalt",
+  "description": "High-speed offline 3D arcade car racing game with 8 cars, 6 drivers, 24 career races, car tools, ramps, pickups, and Shockwave Nitro.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "landscape",
+  "background_color": "#080c16",
+  "theme_color": "#080c16",
+  "categories": ["games", "racing"],
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/pwa-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/pwa-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/pwa-maskable-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}
