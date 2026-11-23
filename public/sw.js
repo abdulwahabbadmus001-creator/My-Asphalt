@@ -1,4 +1,4 @@
-const CACHE_NAME = 'apex-velocity-3d-v1';
+const CACHE_NAME = 'my-asphalt-v1';
 const APP_SHELL = [
   '/',
   '/index.html',

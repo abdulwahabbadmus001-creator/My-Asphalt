@@ -1,5 +1,5 @@
 {
-  "name": "Apex Velocity 3D",
+  "name": "My Asphalt",
   "description": "High-speed offline 3D arcade car racing game with procedural Three.js cars, three spline circuits, progressive tournaments, garage tuning, and Web Audio synthesis.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]

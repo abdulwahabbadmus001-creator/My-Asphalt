@@ -4,8 +4,10 @@
   html,
   body,
   #root {
-    width: 100vw;
-    height: 100vh;
+    position: fixed;
+    inset: 0;
+    width: 100dvw;
+    height: 100dvh;
     margin: 0;
     padding: 0;
     overflow: hidden;
@@ -16,6 +18,13 @@
     user-select: none;
     -webkit-user-select: none;
   }
+}
+
+.safe-area-pad {
+  padding-top: max(0.75rem, env(safe-area-inset-top));
+  padding-right: max(0.75rem, env(safe-area-inset-right));
+  padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
+  padding-left: max(0.75rem, env(safe-area-inset-left));
 }
 
 .font-display {

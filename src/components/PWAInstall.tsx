@@ -93,7 +93,7 @@ export const PWAInstallButton: React.FC = () => {
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 pointer-events-auto">
             <div className="w-full max-w-sm rounded-lg bg-[#111827] border border-slate-700 p-5 text-slate-100">
               <h3 className="font-display text-lg font-bold tracking-wide">
-                Install Apex Velocity 3D
+                Install My Asphalt
               </h3>
               <p className="mt-2 text-sm text-slate-300 leading-relaxed">
                 1. Tap the <strong>Share</strong> icon in Safari.

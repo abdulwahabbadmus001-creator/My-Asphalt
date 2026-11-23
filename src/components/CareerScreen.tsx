@@ -54,7 +54,7 @@ export function CareerScreen({
   const classStyle = CLASS_COLORS[car.carClass];
 
   return (
-    <div className="fixed inset-0 z-10 flex flex-col justify-between bg-[#060911]/92 p-4 sm:p-5">
+    <div className="safe-area-pad fixed inset-0 z-10 flex flex-col justify-between bg-[#060911]/92 p-3 sm:p-5">
       {/* Top Bar */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-3">

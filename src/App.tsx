@@ -114,7 +114,9 @@ export default function App() {
   );
 
   const [isPortrait, setIsPortrait] = useState<boolean>(() =>
-    typeof window !== 'undefined' ? window.innerWidth < window.innerHeight : false
+    typeof window !== 'undefined'
+      ? window.innerWidth <= 900 && window.innerWidth < window.innerHeight
+      : false
   );
   const [portraitBypassed, setPortraitBypassed] = useState(false);
 
@@ -167,8 +169,14 @@ export default function App() {
     const t = touchInputRef.current;
     const g = gamepadInputRef.current;
     const doubleTapActive = performance.now() < doubleTapNitroUntilRef.current;
+    const autoThrottle =
+      profileRef.current.touchControlsEnabled &&
+      activeRaceConfigRef.current.mode !== 'splitscreen' &&
+      !t.brake &&
+      !k.brake;
+
     sceneRef.current?.setInputState({
-      throttle: k.throttle || t.throttle || g.throttle,
+      throttle: k.throttle || t.throttle || g.throttle || autoThrottle,
       brake: k.brake || t.brake || g.brake,
       left: k.left || t.left || g.left,
       right: k.right || t.right || g.right,
@@ -247,10 +255,25 @@ export default function App() {
     audioEngine.setMusicEnabled(profile.musicEnabled);
   }, [profile]);
 
-  // Smart Landscape orientation listener
+  // Unlock Web Audio on first user gesture for mobile autoplay policy compliance
+  useEffect(() => {
+    const unlockOnce = () => {
+      audioEngine.unlock();
+      window.removeEventListener('pointerdown', unlockOnce);
+      window.removeEventListener('touchstart', unlockOnce);
+    };
+    window.addEventListener('pointerdown', unlockOnce, { passive: true });
+    window.addEventListener('touchstart', unlockOnce, { passive: true });
+    return () => {
+      window.removeEventListener('pointerdown', unlockOnce);
+      window.removeEventListener('touchstart', unlockOnce);
+    };
+  }, []);
+
+  // Smart Landscape orientation listener (mobile viewports <= 900px)
   useEffect(() => {
     const onResize = () => {
-      const portrait = window.innerWidth < window.innerHeight;
+      const portrait = window.innerWidth <= 900 && window.innerWidth < window.innerHeight;
       setIsPortrait(portrait);
       if (!portrait) {
         setPortraitBypassed(false);
@@ -785,7 +808,7 @@ export default function App() {
   const activeTrackData = getTrackData(activeTrackId);
 
   return (
-    <div className="relative h-screen w-screen overflow-hidden bg-[#060911] text-white">
+    <div className="relative h-[100dvh] w-[100dvw] overflow-hidden bg-[#060911] text-white">
       {/* Persistent Full-Screen 3D WebGL Canvas */}
       <div ref={canvasContainerRef} className="fixed inset-0 h-full w-full" />
 

@@ -68,7 +68,7 @@ export function TitleScreen({
   const classStyle = CLASS_COLORS[car.carClass];
 
   return (
-    <div className="pointer-events-none fixed inset-0 z-10 flex flex-col justify-between p-4 sm:p-6">
+    <div className="pointer-events-none safe-area-pad fixed inset-0 z-10 flex flex-col justify-between overflow-y-auto p-3 sm:p-6">
       {/* Top Bar: Title Lockup + Cash & Audio/Graphics Controls */}
       <div className="flex items-start justify-between gap-4">
         {/* Custom SVG Metallic Lockup — wide viewBox so zero clipping */}

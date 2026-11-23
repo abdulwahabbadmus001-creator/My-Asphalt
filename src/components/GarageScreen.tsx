@@ -104,7 +104,7 @@ export function GarageScreen({
   };
 
   return (
-    <div className="pointer-events-none fixed inset-0 z-10 flex flex-col justify-between p-3.5 sm:p-5">
+    <div className="pointer-events-none safe-area-pad fixed inset-0 z-10 flex flex-col justify-between p-3 sm:p-5">
       {/* Top Bar */}
       <div className="flex items-center justify-between gap-3">
         <div className="pointer-events-auto flex items-center gap-3">

@@ -144,7 +144,14 @@ export function RaceHud({
       )}
 
       {/* Top Row: Position / Lap / Stunt Cash Left | Timers & Controls Right */}
-      <div className="flex items-start justify-between p-3 sm:p-4">
+      <div
+        className="flex items-start justify-between p-2.5 sm:p-4"
+        style={{
+          paddingTop: 'max(0.625rem, env(safe-area-inset-top))',
+          paddingLeft: 'max(0.625rem, env(safe-area-inset-left))',
+          paddingRight: 'max(0.625rem, env(safe-area-inset-right))',
+        }}
+      >
         {/* Top-Left: Position, Lap & Stunt Multiplier */}
         <div className="flex flex-col gap-2">
           <div className="flex items-stretch gap-2">
@@ -398,18 +405,23 @@ export function RaceHud({
       )}
 
       {/* Bottom Row: Minimap Left | Speedometer & Shockwave Nitro Right */}
-      <div className="fixed inset-x-0 bottom-0 flex items-end justify-between p-3 sm:p-4">
+      <div
+        className="fixed inset-x-0 bottom-0 flex items-end justify-between p-2.5 sm:p-4"
+        style={{
+          paddingBottom: 'max(0.625rem, env(safe-area-inset-bottom))',
+          paddingLeft: 'max(0.625rem, env(safe-area-inset-left))',
+          paddingRight: 'max(0.625rem, env(safe-area-inset-right))',
+        }}
+      >
         {/* Bottom-Left: Live Top-Down 2D Minimap */}
         <div
-          className={`carbon-panel rounded-xl border border-slate-700/90 p-2 shadow-2xl ${
-            touchControlsEnabled ? 'mb-24 sm:mb-28' : ''
+          className={`carbon-panel rounded-xl border border-slate-700/90 p-1.5 shadow-2xl sm:p-2 ${
+            touchControlsEnabled ? 'mb-20 sm:mb-28' : ''
           }`}
         >
           <svg
-            width="124"
-            height="124"
             viewBox="0 0 124 124"
-            className="block"
+            className="block h-20 w-20 sm:h-[124px] sm:w-[124px]"
             aria-label="Track Minimap"
           >
             <polygon
@@ -452,11 +464,11 @@ export function RaceHud({
         {/* Bottom-Right: Digital Speedometer + RPM Arc + Shockwave Nitro Gauge (Single-Viewport Modes) */}
         {telemetry.mode !== 'splitscreen' && (
         <div
-          className={`carbon-panel flex items-end gap-3 rounded-2xl border p-3 shadow-2xl ${
+          className={`carbon-panel origin-bottom-right scale-90 sm:scale-100 flex items-end gap-3 rounded-2xl border p-2.5 sm:p-3 shadow-2xl ${
             telemetry.isShockwave
               ? 'border-fuchsia-400 shadow-[0_0_24px_rgba(217,70,239,0.45)]'
               : 'border-slate-700/90'
-          } ${touchControlsEnabled ? 'mb-24 sm:mb-28' : ''}`}
+          } ${touchControlsEnabled ? 'mb-20 sm:mb-28' : ''}`}
         >
           {/* Nitro / Shockwave Vertical Gauge */}
           <div className="flex flex-col items-center gap-1">
@@ -548,15 +560,22 @@ export function RaceHud({
         )}
       </div>
 
-      {/* Landscape On-Screen Touch Controls */}
+      {/* Landscape On-Screen Multi-Touch Arcade Controls (Auto-Accelerate Active) */}
       {touchControlsEnabled && telemetry.phase !== 'finished' && (
-        <div className="pointer-events-none fixed inset-x-0 bottom-2 z-30 flex items-end justify-between px-3">
-          {/* Left Side: Steer Left / Right */}
+        <div
+          className="pointer-events-none fixed inset-x-0 bottom-0 z-30 flex items-end justify-between px-3 pb-2.5"
+          style={{
+            paddingBottom: 'max(0.625rem, env(safe-area-inset-bottom))',
+            paddingLeft: 'max(0.75rem, env(safe-area-inset-left))',
+            paddingRight: 'max(0.75rem, env(safe-area-inset-right))',
+          }}
+        >
+          {/* Bottom-Left: Steer Left / Right Zones */}
           <div className="pointer-events-auto flex items-center gap-2.5">
             <button
               type="button"
               {...bindTouch('left')}
-              className="flex h-16 w-20 touch-none items-center justify-center rounded-2xl border-2 border-slate-500/80 bg-[#0b101b]/90 text-xl font-black text-white active:border-cyan-400 active:bg-cyan-500/30"
+              className="flex h-16 w-20 touch-none items-center justify-center rounded-2xl border-2 border-slate-400/55 bg-[#0b101b]/65 text-2xl font-black text-white/95 transition-colors active:border-cyan-400 active:bg-cyan-500/35 sm:h-20 sm:w-24"
               aria-label="Steer Left"
             >
               ◀
@@ -564,47 +583,47 @@ export function RaceHud({
             <button
               type="button"
               {...bindTouch('right')}
-              className="flex h-16 w-20 touch-none items-center justify-center rounded-2xl border-2 border-slate-500/80 bg-[#0b101b]/90 text-xl font-black text-white active:border-cyan-400 active:bg-cyan-500/30"
+              className="flex h-16 w-20 touch-none items-center justify-center rounded-2xl border-2 border-slate-400/55 bg-[#0b101b]/65 text-2xl font-black text-white/95 transition-colors active:border-cyan-400 active:bg-cyan-500/35 sm:h-20 sm:w-24"
               aria-label="Steer Right"
             >
               ▶
             </button>
           </div>
 
-          {/* Right Side: Drift, Brake, Nitro/Shockwave, Gas */}
-          <div className="pointer-events-auto flex items-end gap-2">
-            <button
-              type="button"
-              {...bindTouch('drift')}
-              className="flex h-14 w-16 touch-none flex-col items-center justify-center rounded-2xl border-2 border-amber-400/75 bg-amber-950/85 text-[11px] font-black uppercase text-amber-200 active:bg-amber-500/40"
-            >
-              Drift
-            </button>
-            <button
-              type="button"
-              {...bindTouch('brake')}
-              className="flex h-14 w-16 touch-none flex-col items-center justify-center rounded-2xl border-2 border-rose-500/75 bg-rose-950/85 text-[11px] font-black uppercase text-rose-200 active:bg-rose-500/40"
-            >
-              Brake
-            </button>
+          {/* Bottom-Right: Drift / Brake & Nitro / Shockwave (Auto-Accelerate Enabled) */}
+          <div className="pointer-events-auto flex items-end gap-2.5">
+            <div className="flex flex-col items-center gap-1">
+              <span className="rounded bg-emerald-950/75 px-1.5 py-0.5 text-[9px] font-black uppercase tracking-widest text-emerald-300 border border-emerald-500/40">
+                Auto Gas
+              </span>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  {...bindTouch('brake')}
+                  className="flex h-14 w-16 touch-none flex-col items-center justify-center rounded-2xl border-2 border-rose-500/65 bg-rose-950/60 text-[11px] font-black uppercase text-rose-200 active:bg-rose-500/40 sm:h-16 sm:w-20"
+                >
+                  Brake
+                </button>
+                <button
+                  type="button"
+                  {...bindTouch('drift')}
+                  className="flex h-16 w-20 touch-none flex-col items-center justify-center rounded-2xl border-2 border-amber-400/70 bg-amber-950/60 text-xs font-black uppercase text-amber-200 active:bg-amber-500/40 sm:h-20 sm:w-24"
+                >
+                  Drift
+                </button>
+              </div>
+            </div>
             <button
               type="button"
               {...bindTouch('nitro')}
-              className={`flex h-16 w-16 touch-none flex-col items-center justify-center rounded-2xl border-2 text-[10px] font-black uppercase ${
+              className={`flex h-20 w-20 touch-none flex-col items-center justify-center gap-0.5 rounded-2xl border-2 text-xs font-black uppercase transition-colors sm:h-24 sm:w-24 ${
                 telemetry.shockwaveReady || telemetry.isShockwave
-                  ? 'border-fuchsia-400 bg-fuchsia-950/90 text-fuchsia-200'
-                  : 'border-cyan-400/80 bg-cyan-950/85 text-cyan-200'
+                  ? 'border-fuchsia-400 bg-fuchsia-950/70 text-fuchsia-200 shadow-[0_0_20px_rgba(217,70,239,0.45)] active:bg-fuchsia-500/45'
+                  : 'border-cyan-400/75 bg-cyan-950/65 text-cyan-200 active:bg-cyan-500/40'
               }`}
             >
-              <Flame className="h-4 w-4" />
+              <Flame className="h-5 w-5" />
               <span>{telemetry.shockwaveReady ? 'Shock' : 'Nitro'}</span>
-            </button>
-            <button
-              type="button"
-              {...bindTouch('throttle')}
-              className="flex h-20 w-20 touch-none flex-col items-center justify-center rounded-2xl border-2 border-emerald-400/85 bg-emerald-950/90 text-xs font-black uppercase text-emerald-200 active:bg-emerald-500/40"
-            >
-              Gas
             </button>
           </div>
         </div>

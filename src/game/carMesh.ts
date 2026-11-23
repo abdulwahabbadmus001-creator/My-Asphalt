@@ -8,7 +8,7 @@ export interface CarVisualRig {
   chassisGroup: THREE.Group;
   wheelMeshes: THREE.Object3D[];
   frontWheelPivots: THREE.Group[];
-  bodyMaterial: THREE.MeshPhysicalMaterial;
+  bodyMaterial: THREE.MeshStandardMaterial | THREE.MeshPhysicalMaterial;
   rimMaterial: THREE.MeshStandardMaterial;
   caliperMaterial: THREE.MeshStandardMaterial;
   rotorMaterial: THREE.MeshStandardMaterial;
@@ -463,9 +463,26 @@ function createSoftGlowTexture(): THREE.CanvasTexture {
 }
 
 let cachedGlowTex: THREE.CanvasTexture | null = null;
+let cachedContactShadowTex: THREE.CanvasTexture | null = null;
+
+function createContactShadowTexture(): THREE.CanvasTexture {
+  if (cachedContactShadowTex) return cachedContactShadowTex;
+  const c = document.createElement('canvas');
+  c.width = 128;
+  c.height = 256;
+  const ctx = c.getContext('2d')!;
+  const grad = ctx.createRadialGradient(64, 128, 18, 64, 128, 122);
+  grad.addColorStop(0, 'rgba(2, 6, 23, 0.78)');
+  grad.addColorStop(0.55, 'rgba(2, 6, 23, 0.44)');
+  grad.addColorStop(1, 'rgba(2, 6, 23, 0)');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, 128, 256);
+  cachedContactShadowTex = new THREE.CanvasTexture(c);
+  return cachedContactShadowTex;
+}
 
 function applyFinishToMaterial(
-  mat: THREE.MeshPhysicalMaterial,
+  mat: THREE.MeshStandardMaterial | THREE.MeshPhysicalMaterial,
   finish: PaintFinish,
   flakeMap: THREE.CanvasTexture
 ): void {
@@ -473,14 +490,18 @@ function applyFinishToMaterial(
     mat.metalness = 0.24;
     mat.roughness = 0.62;
     mat.roughnessMap = null;
-    mat.clearcoat = 0.14;
-    mat.clearcoatRoughness = 0.48;
+    if (mat instanceof THREE.MeshPhysicalMaterial) {
+      mat.clearcoat = 0.14;
+      mat.clearcoatRoughness = 0.48;
+    }
   } else {
     mat.metalness = 0.68;
     mat.roughness = 0.24;
     mat.roughnessMap = flakeMap;
-    mat.clearcoat = 1.0;
-    mat.clearcoatRoughness = 0.08;
+    if (mat instanceof THREE.MeshPhysicalMaterial) {
+      mat.clearcoat = 1.0;
+      mat.clearcoatRoughness = 0.08;
+    }
   }
   mat.needsUpdate = true;
 }
@@ -678,8 +699,10 @@ function addVisibleEngineBay(
 export function buildCarRig(
   carId: CarId,
   custom: CarCustomization,
-  hasActiveAero = false
+  hasActiveAero = false,
+  options: { useClearcoat?: boolean; includeContactShadow?: boolean } = {}
 ): CarVisualRig {
+  const { useClearcoat = true, includeContactShadow = true } = options;
   const profile = SILHOUETTES[carId] ?? SILHOUETTES.civic_gt;
   const spec = CAR_CATALOG[carId] ?? CAR_CATALOG.civic_gt;
   const root = new THREE.Group();
@@ -687,15 +710,23 @@ export function buildCarRig(
   root.add(chassisGroup);
 
   const flakeMap = createMetallicFlakeRoughnessMap(4);
-  const bodyMaterial = new THREE.MeshPhysicalMaterial({
-    color: new THREE.Color(custom.bodyColor),
-    metalness: 0.68,
-    roughness: 0.24,
-    roughnessMap: flakeMap,
-    clearcoat: 1.0,
-    clearcoatRoughness: 0.08,
-    reflectivity: 1.0,
-  });
+  const bodyMaterial = useClearcoat
+    ? new THREE.MeshPhysicalMaterial({
+        color: new THREE.Color(custom.bodyColor),
+        metalness: 0.68,
+        roughness: 0.24,
+        roughnessMap: flakeMap,
+        clearcoat: 1.0,
+        clearcoatRoughness: 0.08,
+        reflectivity: 1.0,
+      })
+    : new THREE.MeshStandardMaterial({
+        color: new THREE.Color(custom.bodyColor),
+        metalness: 0.68,
+        roughness: 0.24,
+        roughnessMap: flakeMap,
+        envMapIntensity: 1.15,
+      });
   applyFinishToMaterial(bodyMaterial, custom.finish, flakeMap);
 
   const carbonMat = new THREE.MeshStandardMaterial({
@@ -1488,6 +1519,22 @@ export function buildCarRig(
   underglowMesh.position.y = 0.04;
   underglowMesh.visible = custom.underglowColor !== 'none';
   root.add(underglowMesh);
+
+  if (includeContactShadow) {
+    const contactShadowMat = new THREE.MeshBasicMaterial({
+      map: createContactShadowTexture(),
+      transparent: true,
+      opacity: 0.85,
+      depthWrite: false,
+    });
+    const contactShadowMesh = new THREE.Mesh(
+      new THREE.PlaneGeometry(profile.bodyWidth * 1.38, (profile.noseZ - profile.tailZ) * 1.14),
+      contactShadowMat
+    );
+    contactShadowMesh.rotation.x = -Math.PI / 2;
+    contactShadowMesh.position.y = 0.025;
+    root.add(contactShadowMesh);
+  }
 
   // 4 Articulated Wheels (Front Steerable Pivots + Rear, each with glowing brake rotor)
   const wheelMeshes: THREE.Object3D[] = [];

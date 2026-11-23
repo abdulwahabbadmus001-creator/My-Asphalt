@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
@@ -190,6 +191,21 @@ function detectSoftwareGl(gl: WebGLRenderingContext | WebGL2RenderingContext): b
   }
 }
 
+function disposeObject3D(root: THREE.Object3D): void {
+  root.traverse((obj) => {
+    const mesh = obj as THREE.Mesh;
+    if (mesh.geometry) {
+      mesh.geometry.dispose();
+    }
+    if (mesh.material) {
+      const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+      for (const mat of mats) {
+        mat.dispose();
+      }
+    }
+  });
+}
+
 export class GameSceneManager {
   private container: HTMLElement;
   private callbacks: SceneManagerCallbacks;
@@ -307,10 +323,11 @@ export class GameSceneManager {
       powerPreference: 'high-performance',
     });
     this.isSoftwareGl = detectSoftwareGl(this.renderer.getContext());
+    const isMobile = this.isMobileViewport();
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.14;
+    this.renderer.toneMappingExposure = 1.15;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
-    this.renderer.shadowMap.enabled = !this.isSoftwareGl;
+    this.renderer.shadowMap.enabled = !this.isSoftwareGl && !isMobile;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.domElement.style.width = '100%';
     this.renderer.domElement.style.height = '100%';
@@ -339,7 +356,7 @@ export class GameSceneManager {
 
     this.sunLight = new THREE.DirectionalLight(0xffffff, 2.35);
     this.sunLight.position.set(16, 28, 18);
-    this.sunLight.castShadow = !this.isSoftwareGl;
+    this.sunLight.castShadow = !this.isSoftwareGl && !isMobile;
     this.sunLight.shadow.mapSize.set(2048, 2048);
     this.sunLight.shadow.bias = -0.0004;
     this.sunLight.shadow.normalBias = 0.025;
@@ -374,10 +391,28 @@ export class GameSceneManager {
     this.scheduleNextFrame();
   }
 
+  private isMobileViewport(): boolean {
+    return (
+      /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent) ||
+      window.innerWidth < 900
+    );
+  }
+
   private applyEnvironmentTheme(theme: TrackId | 'showroom'): void {
     if (this.currentEnvTheme === theme && this.envRT) return;
     this.envRT?.dispose();
     this.envCubeTex?.dispose();
+    this.envCubeTex = null;
+
+    if (theme === 'showroom') {
+      const roomEnv = new RoomEnvironment();
+      const rt = this.pmremGenerator.fromScene(roomEnv, 0.04);
+      roomEnv.dispose();
+      this.envRT = rt;
+      this.scene.environment = rt.texture;
+      this.currentEnvTheme = theme;
+      return;
+    }
 
     const cubeTex = createProceduralSkyCubemap(theme);
     const rt = this.pmremGenerator.fromCubemap(cubeTex);
@@ -460,10 +495,11 @@ export class GameSceneManager {
   public resize(): void {
     const w = Math.max(1, this.container.clientWidth || window.innerWidth);
     const h = Math.max(1, this.container.clientHeight || window.innerHeight);
+    const maxDpr = this.isMobileViewport() ? 1.25 : 2;
     const targetDpr = this.isSoftwareGl
       ? 1
       : this.quality === 'high'
-        ? Math.min(window.devicePixelRatio || 1, 2)
+        ? Math.min(window.devicePixelRatio || 1, maxDpr)
         : 1;
     this.renderer.setPixelRatio(targetDpr);
     this.renderer.setSize(w, h, false);
@@ -477,7 +513,9 @@ export class GameSceneManager {
 
   public setQuality(quality: GraphicsQuality): void {
     this.quality = quality;
-    this.renderer.shadowMap.enabled = !this.isSoftwareGl && quality === 'high';
+    const allowShadows = !this.isSoftwareGl && !this.isMobileViewport() && quality === 'high';
+    this.renderer.shadowMap.enabled = allowShadows;
+    this.sunLight.castShadow = allowShadows;
     this.resize();
   }
 
@@ -712,8 +750,12 @@ export class GameSceneManager {
     if (this.showroomCarId !== carId || !this.showroomCarRig) {
       if (this.showroomCarRig) {
         this.showroomGroup.remove(this.showroomCarRig.root);
+        disposeObject3D(this.showroomCarRig.root);
       }
-      this.showroomCarRig = buildCarRig(carId, custom, hasActiveAero);
+      this.showroomCarRig = buildCarRig(carId, custom, hasActiveAero, {
+        useClearcoat: true,
+        includeContactShadow: true,
+      });
       this.showroomCarRig.root.position.set(0.35, 0.22, 0);
       this.showroomGroup.add(this.showroomCarRig.root);
       this.showroomCarId = carId;
@@ -744,11 +786,13 @@ export class GameSceneManager {
     }
     for (const rig of this.racerRigs.values()) {
       this.raceGroup.remove(rig.root);
+      disposeObject3D(rig.root);
     }
     this.racerRigs.clear();
 
     if (this.ghostRig) {
       this.raceGroup.remove(this.ghostRig);
+      disposeObject3D(this.ghostRig);
       this.ghostRig = null;
     }
     this.activeGhostRecord = null;
@@ -886,7 +930,8 @@ export class GameSceneManager {
     this.sunLight.intensity = this.trackVisuals.sunIntensity;
     this.sunLight.position.copy(this.trackVisuals.sunPosition);
 
-    // Spawn all 3D car rigs
+    // Spawn all 3D car rigs (clearcoat in high-spec desktop, standard PBR on mobile for 60 FPS)
+    const useClearcoatInRace = !this.isMobileViewport() && this.quality === 'high';
     for (const racer of world.racers) {
       const rig = buildCarRig(
         racer.carId,
@@ -897,7 +942,8 @@ export class GameSceneManager {
           caliperColor: racer.caliperColor,
           underglowColor: racer.underglowColor,
         },
-        racer.hasActiveAero
+        racer.hasActiveAero,
+        { useClearcoat: useClearcoatInRace, includeContactShadow: true }
       );
       rig.root.position.set(racer.worldPos.x, racer.worldPos.y, racer.worldPos.z);
       rig.root.rotation.y = racer.worldYaw;
@@ -1548,12 +1594,14 @@ export class GameSceneManager {
     const fwdX = Math.sin(racer.worldYaw);
     const fwdZ = Math.cos(racer.worldYaw);
 
+    const speedRatio = Math.min(1, Math.max(0, racer.speed / Math.max(1, racer.perf.maxSpeedMps)));
     let shakeX = 0;
     let shakeY = 0;
     if (isPrimary) {
       this.shakeIntensity = Math.max(0, this.shakeIntensity - dt * 1.45);
-      const shockShake = racer.isShockwave ? 0.14 : 0;
-      const totalShake = this.shakeIntensity + shockShake;
+      const highSpeedVibe = speedRatio > 0.78 ? (speedRatio - 0.78) * 0.16 : 0;
+      const shockShake = racer.isShockwave ? 0.14 : racer.isNitroActive ? 0.05 : 0;
+      const totalShake = this.shakeIntensity + shockShake + highSpeedVibe;
       shakeX = (Math.random() - 0.5) * totalShake;
       shakeY = (Math.random() - 0.5) * totalShake * 0.65;
     }
@@ -1590,10 +1638,9 @@ export class GameSceneManager {
         racer.worldPos.y + 1.1,
         racer.worldPos.z + fwdZ * 36
       );
-      targetFov =
-        68 +
-        Math.min(14, (racer.speed / 85) * 12) +
-        (racer.isShockwave ? 11 : racer.isNitroActive ? 6 : 0);
+      targetFov = racer.isShockwave
+        ? 88
+        : 64 + speedRatio * 16 + (racer.isNitroActive ? 5 : 0);
     } else {
       const dist = isPrimary && this.cameraMode === 'far' ? 12.2 : 8.5;
       const height = isPrimary && this.cameraMode === 'far' ? 4.9 : 3.45;
@@ -1616,10 +1663,10 @@ export class GameSceneManager {
       cam.position.set(posSmooth.x + shakeX, posSmooth.y + shakeY, posSmooth.z);
       cam.lookAt(lookSmooth);
 
-      targetFov =
-        (isPrimary && this.cameraMode === 'far' ? 62 : 58) +
-        Math.min(14, (racer.speed / 85) * 12) +
-        (racer.isShockwave ? 13 : racer.isNitroActive ? 7 : 0);
+      const baseFov = isPrimary && this.cameraMode === 'far' ? 60 : 58;
+      targetFov = racer.isShockwave
+        ? 88
+        : baseFov + speedRatio * 22 + (racer.isNitroActive ? 4 : 0);
     }
 
     cam.fov += (targetFov - cam.fov) * Math.min(1, dt * 6);
@@ -1747,6 +1794,7 @@ export class GameSceneManager {
     audioEngine.stopMusic();
 
     this.clearRaceGroup();
+    disposeObject3D(this.showroomGroup);
     this.showroomFloorTex?.dispose();
     this.envRT?.dispose();
     this.envCubeTex?.dispose();

@@ -18,6 +18,11 @@ import type {
 } from './types';
 
 const STORAGE_KEY = 'my_asphalt_profile_v2';
+const LEGACY_STORAGE_KEYS = [
+  'my_asphalt_profile_v1',
+  'apex_velocity_profile_v2',
+  'apex_velocity_profile_v1',
+];
 
 export function createDefaultProfile(): PlayerProfile {
   const isCoarsePointer =
@@ -162,7 +167,16 @@ export function loadProfile(): PlayerProfile {
     return defaults;
   }
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
+    let raw = window.localStorage.getItem(STORAGE_KEY);
+    if (!raw) {
+      for (const legacyKey of LEGACY_STORAGE_KEYS) {
+        const legacyRaw = window.localStorage.getItem(legacyKey);
+        if (legacyRaw) {
+          raw = legacyRaw;
+          break;
+        }
+      }
+    }
     if (!raw) return defaults;
     const parsed = JSON.parse(raw) as Record<string, unknown>;
     return migrateProfileData(parsed, defaults);
