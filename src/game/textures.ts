@@ -166,6 +166,37 @@ export function createMetallicFlakeRoughnessMap(maxAniso: number): THREE.CanvasT
   return tex;
 }
 
+let cachedCarbonTex: THREE.CanvasTexture | null = null;
+
+/**
+ * Procedural diagonal twill carbon-fiber weave texture for splitters, diffusers, skirts, and wings.
+ */
+export function createCarbonFiberTexture(maxAniso = 4): THREE.CanvasTexture {
+  if (cachedCarbonTex) return cachedCarbonTex;
+  const [canvas, ctx] = makeCanvas(64, 64);
+  ctx.fillStyle = '#0d1118';
+  ctx.fillRect(0, 0, 64, 64);
+
+  for (let y = 0; y < 64; y += 8) {
+    for (let x = 0; x < 64; x += 8) {
+      const shift = (y / 8) % 2 === 0 ? 0 : 4;
+      ctx.fillStyle = '#1b2230';
+      ctx.fillRect((x + shift) % 64, y, 4, 4);
+      ctx.fillStyle = '#242d3e';
+      ctx.fillRect((x + shift + 4) % 64, y + 4, 4, 4);
+    }
+  }
+
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(6, 6);
+  tex.anisotropy = Math.min(4, maxAniso);
+  cachedCarbonTex = tex;
+  return tex;
+}
+
 /**
  * Procedural screen-space-style reflection texture for Rainy Neon Night City road puddles.
  * Encodes inverted neon skyline streaks, cyan/magenta streetlight blooms, and organic feathered puddle alpha.

@@ -4,6 +4,7 @@ import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
+import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { audioEngine } from './audio';
 import {
   applyCarCustomization,
@@ -220,9 +221,11 @@ export class GameSceneManager {
   private envCubeTex: THREE.CubeTexture | null = null;
   private currentEnvTheme: TrackId | 'showroom' | null = null;
 
-  // Post-processing composer for Photo Mode (Motion Blur + Color Grading)
+  // Post-processing composer (Bloom + Photo Mode Motion Blur / Color Grading)
   private composer: EffectComposer;
+  private bloomPass: UnrealBloomPass;
   private photoPass: ShaderPass;
+  private cssRotated = false;
 
   private hemiLight: THREE.HemisphereLight;
   private sunLight: THREE.DirectionalLight;
@@ -296,6 +299,11 @@ export class GameSceneManager {
   private smokeMax = 140;
   private smokeCooldown = 0;
 
+  // 3D Speed-Streak Particle Field
+  private speedLinesPoints: THREE.Points | null = null;
+  private speedLinesPositions: Float32Array | null = null;
+  private speedLinesCount = 150;
+
   // Camera smoothing & shake (P1 & P2 Split-Screen)
   private camPosSmooth = new THREE.Vector3(0, 6, 12);
   private camLookSmooth = new THREE.Vector3(0, 1, 0);
@@ -325,7 +333,7 @@ export class GameSceneManager {
     this.isSoftwareGl = detectSoftwareGl(this.renderer.getContext());
     const isMobile = this.isMobileViewport();
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.15;
+    this.renderer.toneMappingExposure = 1.18;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.shadowMap.enabled = !this.isSoftwareGl && !isMobile;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -344,11 +352,18 @@ export class GameSceneManager {
     this.pmremGenerator.compileCubemapShader();
     this.applyEnvironmentTheme('showroom');
 
-    // EffectComposer for Photo Mode (Motion Blur + Color Grading)
+    // EffectComposer with subtle UnrealBloomPass + Photo Mode pass
     this.composer = new EffectComposer(this.renderer);
     this.composer.addPass(new RenderPass(this.scene, this.camera));
+    const bloomRes = new THREE.Vector2(
+      Math.max(1, container.clientWidth) * (isMobile ? 0.5 : 1),
+      Math.max(1, container.clientHeight) * (isMobile ? 0.5 : 1)
+    );
+    this.bloomPass = new UnrealBloomPass(bloomRes, 0.42, 0.35, 0.85);
+    this.composer.addPass(this.bloomPass);
     this.composer.addPass(new OutputPass());
     this.photoPass = new ShaderPass(PhotoPostShader);
+    this.photoPass.enabled = false;
     this.composer.addPass(this.photoPass);
 
     this.hemiLight = new THREE.HemisphereLight(0xbae6fd, 0x0f172a, 1.05);
@@ -474,7 +489,8 @@ export class GameSceneManager {
     }
 
     if (this.mode === 'showroom') {
-      this.showroomUserOrbitOffset -= dx * 0.008;
+      const delta = this.cssRotated ? dy : dx;
+      this.showroomUserOrbitOffset -= delta * 0.008;
     }
   };
 
@@ -492,10 +508,15 @@ export class GameSceneManager {
     );
   };
 
+  public setCssRotated(rotated: boolean): void {
+    this.cssRotated = rotated;
+  }
+
   public resize(): void {
     const w = Math.max(1, this.container.clientWidth || window.innerWidth);
     const h = Math.max(1, this.container.clientHeight || window.innerHeight);
-    const maxDpr = this.isMobileViewport() ? 1.25 : 2;
+    const isMobile = this.isMobileViewport();
+    const maxDpr = isMobile ? 1.25 : 2;
     const targetDpr = this.isSoftwareGl
       ? 1
       : this.quality === 'high'
@@ -505,6 +526,11 @@ export class GameSceneManager {
     this.renderer.setSize(w, h, false);
     this.composer.setPixelRatio(targetDpr);
     this.composer.setSize(w, h);
+    this.bloomPass.setSize(
+      Math.max(1, Math.floor(w * (isMobile ? 0.5 : 1))),
+      Math.max(1, Math.floor(h * (isMobile ? 0.5 : 1)))
+    );
+    this.bloomPass.enabled = !this.isSoftwareGl && this.quality === 'high';
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
     this.cameraP2.aspect = w / Math.max(1, h / 2);
@@ -579,6 +605,7 @@ export class GameSceneManager {
       this.photoPanOffset.set(0, -0.32, 0);
     }
 
+    this.photoPass.enabled = true;
     this.photoPass.uniforms.uMotionBlur.value = this.photoSettings.motionBlur;
     this.photoPass.uniforms.uGradeMode.value = gradeToUniform(this.photoSettings.colorGrade);
   }
@@ -605,6 +632,7 @@ export class GameSceneManager {
 
   public exitPhotoMode(): void {
     this.photoSettings = { ...this.photoSettings, active: false };
+    this.photoPass.enabled = false;
     this.photoModeSource = null;
     this.camera.rotation.z = 0;
   }
@@ -820,6 +848,13 @@ export class GameSceneManager {
       this.smokeTex.dispose();
       this.smokeTex = null;
     }
+    if (this.speedLinesPoints) {
+      this.raceGroup.remove(this.speedLinesPoints);
+      this.speedLinesPoints.geometry.dispose();
+      (this.speedLinesPoints.material as THREE.Material).dispose();
+      this.speedLinesPoints = null;
+      this.speedLinesPositions = null;
+    }
     this.sparks = [];
     this.smokes = [];
   }
@@ -876,6 +911,28 @@ export class GameSceneManager {
     }
     this.smokeMesh.instanceMatrix.needsUpdate = true;
     this.raceGroup.add(this.smokeMesh);
+
+    // High-speed 3D speed-streak particle field around the chase camera
+    const positions = new Float32Array(this.speedLinesCount * 3);
+    for (let i = 0; i < this.speedLinesCount; i++) {
+      positions[i * 3] = (Math.random() - 0.5) * 24;
+      positions[i * 3 + 1] = (Math.random() - 0.5) * 14;
+      positions[i * 3 + 2] = (Math.random() - 0.5) * 32;
+    }
+    const speedGeo = new THREE.BufferGeometry();
+    speedGeo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    const speedMat = new THREE.PointsMaterial({
+      color: 0xe0f2fe,
+      size: 0.14,
+      transparent: true,
+      opacity: 0,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    });
+    this.speedLinesPositions = positions;
+    this.speedLinesPoints = new THREE.Points(speedGeo, speedMat);
+    this.speedLinesPoints.frustumCulled = false;
+    this.raceGroup.add(this.speedLinesPoints);
   }
 
   public startRace(opts: {
@@ -917,11 +974,8 @@ export class GameSceneManager {
     this.raceGroup.add(this.trackVisuals.group);
 
     this.scene.background = new THREE.Color(this.trackVisuals.skyColor);
-    this.scene.fog = new THREE.Fog(
-      this.trackVisuals.fogColor,
-      this.trackVisuals.fogNear,
-      this.trackVisuals.fogFar
-    );
+    const fogDensity = opts.trackId === 'night' ? 0.0038 : opts.trackId === 'desert' ? 0.0022 : 0.0025;
+    this.scene.fog = new THREE.FogExp2(this.trackVisuals.fogColor, fogDensity);
     this.hemiLight.color.setHex(this.trackVisuals.hemiSky);
     this.hemiLight.groundColor.setHex(this.trackVisuals.hemiGround);
     this.hemiLight.intensity = this.trackVisuals.hemiIntensity;
@@ -1671,6 +1725,38 @@ export class GameSceneManager {
 
     cam.fov += (targetFov - cam.fov) * Math.min(1, dt * 6);
     cam.updateProjectionMatrix();
+
+    if (isPrimary && world.phase === 'racing') {
+      cam.rotateZ(-racer.steerAngle * 0.065);
+    }
+
+    // Update 3D speed-streak particle field rushing past camera at high speed
+    if (isPrimary && this.speedLinesPoints && this.speedLinesPositions) {
+      const mat = this.speedLinesPoints.material as THREE.PointsMaterial;
+      const intensity = Math.max(0, (speedRatio - 0.58) / 0.42) + (racer.isShockwave ? 0.45 : racer.isNitroActive ? 0.25 : 0);
+      mat.opacity = Math.min(0.68, intensity * 0.5);
+      mat.color.setHex(racer.isShockwave ? 0xf0abfc : 0xe0f2fe);
+      this.speedLinesPoints.visible = mat.opacity > 0.03;
+
+      if (this.speedLinesPoints.visible) {
+        const posArr = this.speedLinesPositions;
+        const rush = Math.max(18, racer.speed * 1.1) * dt;
+        for (let i = 0; i < this.speedLinesCount; i++) {
+          const idx = i * 3;
+          posArr[idx] -= fwdX * rush;
+          posArr[idx + 2] -= fwdZ * rush;
+          const dx = posArr[idx] - cam.position.x;
+          const dy = posArr[idx + 1] - cam.position.y;
+          const dz = posArr[idx + 2] - cam.position.z;
+          if (dx * dx + dy * dy + dz * dz > 580) {
+            posArr[idx] = cam.position.x + fwdX * (16 + Math.random() * 14) + (Math.random() - 0.5) * 18;
+            posArr[idx + 1] = cam.position.y + (Math.random() - 0.5) * 9;
+            posArr[idx + 2] = cam.position.z + fwdZ * (16 + Math.random() * 14) + (Math.random() - 0.5) * 18;
+          }
+        }
+        this.speedLinesPoints.geometry.attributes.position.needsUpdate = true;
+      }
+    }
   }
 
   private renderScene(): void {
@@ -1715,7 +1801,11 @@ export class GameSceneManager {
       this.camera.aspect = fullAspect;
       this.camera.updateProjectionMatrix();
     }
-    this.renderer.render(this.scene, this.camera);
+    if (this.bloomPass.enabled) {
+      this.composer.render();
+    } else {
+      this.renderer.render(this.scene, this.camera);
+    }
   }
 
   private afterDraw(cb: () => void): void {

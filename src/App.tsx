@@ -6,9 +6,9 @@ import { MultiplayerScreen } from './components/MultiplayerScreen';
 import { PhotoModeOverlay } from './components/PhotoModeOverlay';
 import { PodiumScreen } from './components/PodiumScreen';
 import { RaceHud } from './components/RaceHud';
-import { RotateOverlay } from './components/RotateOverlay';
 import { TitleScreen } from './components/TitleScreen';
 import { audioEngine } from './game/audio';
+import { tiltSteering } from './game/tiltSteering';
 import {
   createInitialStandings,
   TOURNAMENT_CATALOG,
@@ -80,6 +80,13 @@ function getInitialTrackFromUrl(): TrackId {
   return 'coastal';
 }
 
+function computeIsCssLandscapeStage(): boolean {
+  if (typeof window === 'undefined') return false;
+  const isTouchOrCompact =
+    window.matchMedia('(pointer: coarse)').matches || window.innerWidth <= 1024;
+  return isTouchOrCompact && window.innerHeight > window.innerWidth;
+}
+
 interface ActiveRaceConfig {
   mode: RaceMode;
   trackId: TrackId;
@@ -113,12 +120,15 @@ export default function App() {
     () => loadProfile().selectedDriverId
   );
 
-  const [isPortrait, setIsPortrait] = useState<boolean>(() =>
-    typeof window !== 'undefined'
-      ? window.innerWidth <= 900 && window.innerWidth < window.innerHeight
-      : false
+  const [isCssLandscapeStage, setIsCssLandscapeStage] = useState<boolean>(() =>
+    computeIsCssLandscapeStage()
   );
-  const [portraitBypassed, setPortraitBypassed] = useState(false);
+  const [tiltEnabled, setTiltEnabled] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    const isMobileOrTablet =
+      window.matchMedia('(pointer: coarse)').matches || window.innerWidth <= 1024;
+    return isMobileOrTablet && tiltSteering.isSupported();
+  });
 
   const [paused, setPaused] = useState(false);
   const [activeTrackId, setActiveTrackId] = useState<TrackId>(() => getInitialTrackFromUrl());
@@ -175,6 +185,18 @@ export default function App() {
       !t.brake &&
       !k.brake;
 
+    const tiltVal = tiltSteering.isEnabled() ? tiltSteering.sampleSteer() : 0;
+    const touchSteer = typeof t.analogSteer === 'number' ? t.analogSteer : 0;
+    const padSteer = typeof g.analogSteer === 'number' ? g.analogSteer : 0;
+    const combinedAnalogSteer =
+      Math.abs(touchSteer) > 0.04
+        ? touchSteer
+        : Math.abs(padSteer) > 0.04
+          ? padSteer
+          : Math.abs(tiltVal) > 0.01
+            ? tiltVal
+            : undefined;
+
     sceneRef.current?.setInputState({
       throttle: k.throttle || t.throttle || g.throttle || autoThrottle,
       brake: k.brake || t.brake || g.brake,
@@ -182,7 +204,7 @@ export default function App() {
       right: k.right || t.right || g.right,
       drift: k.drift || t.drift || g.drift,
       nitro: k.nitro || t.nitro || g.nitro || doubleTapActive,
-      analogSteer: g.analogSteer,
+      analogSteer: combinedAnalogSteer,
       analogThrottle: g.analogThrottle,
       analogBrake: g.analogBrake,
     });
@@ -192,6 +214,7 @@ export default function App() {
   const launchRace = useCallback(
     (config: ActiveRaceConfig, profileOverride?: PlayerProfile) => {
       audioEngine.unlock();
+      tiltSteering.calibrate();
       keyInputRef.current = { ...EMPTY_INPUT };
       keyInputP2Ref.current = { ...EMPTY_INPUT };
       touchInputRef.current = { ...EMPTY_INPUT };
@@ -255,30 +278,59 @@ export default function App() {
     audioEngine.setMusicEnabled(profile.musicEnabled);
   }, [profile]);
 
-  // Unlock Web Audio on first user gesture for mobile autoplay policy compliance
+  // Sync tiltSteering controller with toggle state
   useEffect(() => {
-    const unlockOnce = () => {
+    tiltSteering.setEnabled(tiltEnabled);
+    if (tiltEnabled) {
+      tiltSteering.startListening();
+    }
+  }, [tiltEnabled]);
+
+  // Instant fullscreen landscape + Web Audio + Gyroscope unlock on initial user interaction
+  useEffect(() => {
+    let triggered = false;
+    const triggerLandscapeAndAudio = async () => {
       audioEngine.unlock();
-      window.removeEventListener('pointerdown', unlockOnce);
-      window.removeEventListener('touchstart', unlockOnce);
+      if (triggered) return;
+      triggered = true;
+
+      if (tiltSteering.isSupported()) {
+        await tiltSteering.requestPermissionAndStart();
+      }
+      try {
+        await document.documentElement.requestFullscreen?.().catch(() => {});
+        await (
+          window.screen.orientation as unknown as { lock?: (o: string) => Promise<void> }
+        )?.lock?.('landscape').catch(() => {});
+      } catch {
+        // Fallback CSS landscape stage handles browsers that disallow orientation.lock()
+      }
     };
-    window.addEventListener('pointerdown', unlockOnce, { passive: true });
-    window.addEventListener('touchstart', unlockOnce, { passive: true });
+
+    // Best-effort attempt on mount
+    (window.screen.orientation as unknown as { lock?: (o: string) => Promise<void> })
+      ?.lock?.('landscape')
+      ?.catch(() => {});
+
+    window.addEventListener('pointerdown', triggerLandscapeAndAudio, { capture: true, passive: true });
+    window.addEventListener('click', triggerLandscapeAndAudio, { capture: true, passive: true });
+    window.addEventListener('touchstart', triggerLandscapeAndAudio, { capture: true, passive: true });
     return () => {
-      window.removeEventListener('pointerdown', unlockOnce);
-      window.removeEventListener('touchstart', unlockOnce);
+      window.removeEventListener('pointerdown', triggerLandscapeAndAudio, { capture: true });
+      window.removeEventListener('click', triggerLandscapeAndAudio, { capture: true });
+      window.removeEventListener('touchstart', triggerLandscapeAndAudio, { capture: true });
     };
   }, []);
 
-  // Smart Landscape orientation listener (mobile viewports <= 900px)
+  // Automatic CSS landscape stage listener for mobile/tablet viewports
   useEffect(() => {
     const onResize = () => {
-      const portrait = window.innerWidth <= 900 && window.innerWidth < window.innerHeight;
-      setIsPortrait(portrait);
-      if (!portrait) {
-        setPortraitBypassed(false);
-      }
-      sceneRef.current?.resize();
+      const nextCssRotated = computeIsCssLandscapeStage();
+      setIsCssLandscapeStage(nextCssRotated);
+      sceneRef.current?.setCssRotated(nextCssRotated);
+      window.requestAnimationFrame(() => {
+        sceneRef.current?.resize();
+      });
     };
     window.addEventListener('resize', onResize);
     window.addEventListener('orientationchange', onResize);
@@ -325,6 +377,7 @@ export default function App() {
       onRaceFinished: handleRaceFinished,
     });
     sceneRef.current = manager;
+    manager.setCssRotated(computeIsCssLandscapeStage());
     manager.setQuality(profileRef.current.graphicsQuality);
 
     const params = new URLSearchParams(window.location.search);
@@ -808,14 +861,16 @@ export default function App() {
   const activeTrackData = getTrackData(activeTrackId);
 
   return (
-    <div className="relative h-[100dvh] w-[100dvw] overflow-hidden bg-[#060911] text-white">
+    <div
+      id="landscape-stage"
+      className={
+        isCssLandscapeStage
+          ? 'is-css-rotated overflow-hidden bg-[#05070d] text-white'
+          : 'relative h-[100dvh] w-[100dvw] overflow-hidden bg-[#05070d] text-white'
+      }
+    >
       {/* Persistent Full-Screen 3D WebGL Canvas */}
       <div ref={canvasContainerRef} className="fixed inset-0 h-full w-full" />
-
-      {/* Smart Landscape Portrait Guard with Play in Window Anyway Fallback */}
-      {isPortrait && !portraitBypassed && (
-        <RotateOverlay onBypass={() => setPortraitBypassed(true)} />
-      )}
 
       {/* Title Screen */}
       {screen === 'title' && (
@@ -938,6 +993,23 @@ export default function App() {
           muted={profile.muted}
           musicEnabled={profile.musicEnabled}
           touchControlsEnabled={profile.touchControlsEnabled}
+          isCssRotated={isCssLandscapeStage}
+          tiltEnabled={tiltEnabled}
+          tiltSupported={tiltSteering.isSupported()}
+          onToggleTilt={() => {
+            audioEngine.playUiClick();
+            setTiltEnabled((prev) => {
+              const next = !prev;
+              if (next) {
+                tiltSteering.requestPermissionAndStart();
+              }
+              return next;
+            });
+          }}
+          onAnalogSteerChange={(steer) => {
+            touchInputRef.current.analogSteer = steer;
+            pushMergedInput();
+          }}
           onCycleCamera={() => {
             audioEngine.playUiClick();
             sceneRef.current?.cycleCameraMode();

@@ -7,10 +7,12 @@ import {
   Play,
   RotateCcw,
   Shield,
+  Smartphone,
   Volume2,
   VolumeX,
   Zap,
 } from 'lucide-react';
+import { useRef, useState } from 'react';
 import type { MinimapData } from '../game/tracks';
 import type { GamepadStatus, HudTelemetry, StuntPopup } from '../game/types';
 
@@ -26,6 +28,11 @@ interface RaceHudProps {
   muted: boolean;
   musicEnabled: boolean;
   touchControlsEnabled: boolean;
+  isCssRotated: boolean;
+  tiltEnabled: boolean;
+  tiltSupported: boolean;
+  onToggleTilt: () => void;
+  onAnalogSteerChange: (steer: number) => void;
   onCycleCamera: () => void;
   onTogglePause: () => void;
   onOpenPhotoMode: () => void;
@@ -71,6 +78,11 @@ export function RaceHud({
   muted,
   musicEnabled,
   touchControlsEnabled,
+  isCssRotated,
+  tiltEnabled,
+  tiltSupported,
+  onToggleTilt,
+  onAnalogSteerChange,
   onCycleCamera,
   onTogglePause,
   onOpenPhotoMode,
@@ -89,6 +101,37 @@ export function RaceHud({
   const rpmRadius = 56;
   const rpmArcLen = Math.PI * rpmRadius;
   const rpmDashOffset = rpmArcLen * (1 - Math.min(1, Math.max(0, telemetry.rpmRatio)));
+
+  const joyPadRef = useRef<HTMLDivElement | null>(null);
+  const joyPointerIdRef = useRef<number | null>(null);
+  const [joyKnobOffset, setJoyKnobOffset] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+
+  const updateJoystickFromPointer = (clientX: number, clientY: number) => {
+    const el = joyPadRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const cx = rect.left + rect.width * 0.5;
+    const cy = rect.top + rect.height * 0.5;
+    const dxScreen = clientX - cx;
+    const dyScreen = clientY - cy;
+    // Remap screen deltas to local landscape-stage coordinates when CSS 90° rotation is active
+    const localDx = isCssRotated ? dyScreen : dxScreen;
+    const localDy = isCssRotated ? -dxScreen : dyScreen;
+    const maxRadius = 38;
+    const dist = Math.hypot(localDx, localDy);
+    const clampedScale = dist > maxRadius ? maxRadius / dist : 1;
+    const kx = localDx * clampedScale;
+    const ky = localDy * clampedScale;
+    setJoyKnobOffset({ x: kx, y: ky });
+    const steer = Math.max(-1, Math.min(1, kx / maxRadius));
+    onAnalogSteerChange(Math.abs(steer) < 0.06 ? 0 : steer);
+  };
+
+  const resetJoystick = () => {
+    joyPointerIdRef.current = null;
+    setJoyKnobOffset({ x: 0, y: 0 });
+    onAnalogSteerChange(0);
+  };
 
   const bindTouch = (key: DigitalInputKey) => ({
     onPointerDown: (e: React.PointerEvent) => {
@@ -237,6 +280,22 @@ export function RaceHud({
               <Camera className="h-3.5 w-3.5 text-cyan-400" />
               <span>{telemetry.cameraMode}</span>
             </button>
+
+            {tiltSupported && (
+              <button
+                type="button"
+                onClick={onToggleTilt}
+                className={`carbon-panel flex items-center gap-1 whitespace-nowrap rounded-lg border px-2.5 py-1.5 text-[11px] font-bold uppercase tracking-wider transition ${
+                  tiltEnabled
+                    ? 'border-amber-400 text-amber-200'
+                    : 'border-slate-700 text-slate-400 hover:text-white'
+                }`}
+                title="Toggle Phone Tilt Steering"
+              >
+                <Smartphone className="h-3.5 w-3.5" />
+                <span>Tilt: {tiltEnabled ? 'ON' : 'OFF'}</span>
+              </button>
+            )}
 
             <button
               type="button"
@@ -570,24 +629,46 @@ export function RaceHud({
             paddingRight: 'max(0.75rem, env(safe-area-inset-right))',
           }}
         >
-          {/* Bottom-Left: Steer Left / Right Zones */}
+          {/* Bottom-Left: Virtual Analog Joystick (pointerId tracked) */}
           <div className="pointer-events-auto flex items-center gap-2.5">
-            <button
-              type="button"
-              {...bindTouch('left')}
-              className="flex h-16 w-20 touch-none items-center justify-center rounded-2xl border-2 border-slate-400/55 bg-[#0b101b]/65 text-2xl font-black text-white/95 transition-colors active:border-cyan-400 active:bg-cyan-500/35 sm:h-20 sm:w-24"
-              aria-label="Steer Left"
+            <div
+              ref={joyPadRef}
+              onPointerDown={(e) => {
+                e.preventDefault();
+                joyPointerIdRef.current = e.pointerId;
+                e.currentTarget.setPointerCapture(e.pointerId);
+                updateJoystickFromPointer(e.clientX, e.clientY);
+              }}
+              onPointerMove={(e) => {
+                if (joyPointerIdRef.current !== e.pointerId) return;
+                e.preventDefault();
+                updateJoystickFromPointer(e.clientX, e.clientY);
+              }}
+              onPointerUp={(e) => {
+                if (joyPointerIdRef.current !== e.pointerId) return;
+                e.preventDefault();
+                resetJoystick();
+              }}
+              onPointerCancel={resetJoystick}
+              onLostPointerCapture={resetJoystick}
+              className="relative flex h-28 w-28 touch-none items-center justify-center rounded-full border-2 border-slate-400/55 bg-[#0b101b]/65 shadow-xl sm:h-32 sm:w-32"
+              role="slider"
+              aria-label="Steering Joystick"
+              aria-valuemin={-1}
+              aria-valuemax={1}
+              aria-valuenow={Math.round((joyKnobOffset.x / 38) * 100) / 100}
             >
-              ◀
-            </button>
-            <button
-              type="button"
-              {...bindTouch('right')}
-              className="flex h-16 w-20 touch-none items-center justify-center rounded-2xl border-2 border-slate-400/55 bg-[#0b101b]/65 text-2xl font-black text-white/95 transition-colors active:border-cyan-400 active:bg-cyan-500/35 sm:h-20 sm:w-24"
-              aria-label="Steer Right"
-            >
-              ▶
-            </button>
+              <div className="pointer-events-none absolute inset-x-3 flex justify-between text-xs font-black text-slate-400/75">
+                <span>◀</span>
+                <span>▶</span>
+              </div>
+              <div
+                className="pointer-events-none h-12 w-12 rounded-full border-2 border-cyan-300/90 bg-cyan-500/35 shadow-[0_0_16px_rgba(34,211,238,0.45)]"
+                style={{
+                  transform: `translate3d(${joyKnobOffset.x}px, ${joyKnobOffset.y}px, 0)`,
+                }}
+              />
+            </div>
           </div>
 
           {/* Bottom-Right: Drift / Brake & Nitro / Shockwave (Auto-Accelerate Enabled) */}

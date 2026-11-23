@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { CAR_CATALOG } from './catalog';
-import { createMetallicFlakeRoughnessMap } from './textures';
+import { createCarbonFiberTexture, createMetallicFlakeRoughnessMap } from './textures';
 import type { CarCustomization, CarId, PaintFinish } from './types';
 
 export interface CarVisualRig {
@@ -730,9 +730,10 @@ export function buildCarRig(
   applyFinishToMaterial(bodyMaterial, custom.finish, flakeMap);
 
   const carbonMat = new THREE.MeshStandardMaterial({
-    color: 0x11151d,
-    metalness: 0.36,
-    roughness: 0.44,
+    color: 0xffffff,
+    map: createCarbonFiberTexture(4),
+    metalness: 0.42,
+    roughness: 0.38,
   });
 
   const chromeMat = new THREE.MeshStandardMaterial({
@@ -811,6 +812,20 @@ export function buildCarRig(
   const cabinMesh = new THREE.Mesh(createExtrudedCabinGlass(profile), glassMat);
   cabinMesh.castShadow = true;
   chassisGroup.add(cabinMesh);
+
+  // Sculpted aerodynamic side mirrors
+  const mirrorArmGeo = new THREE.BoxGeometry(0.14, 0.045, 0.07);
+  const mirrorCapGeo = new THREE.BoxGeometry(0.18, 0.085, 0.14);
+  for (const side of [-1, 1]) {
+    const arm = new THREE.Mesh(mirrorArmGeo, carbonMat);
+    arm.position.set(side * (profile.bodyWidth * 0.46), profile.hoodY + 0.14, profile.roofStartZ + 0.12);
+    chassisGroup.add(arm);
+
+    const cap = new THREE.Mesh(mirrorCapGeo, bodyMaterial);
+    cap.position.set(side * (profile.bodyWidth * 0.54), profile.hoodY + 0.17, profile.roofStartZ + 0.09);
+    cap.rotation.y = side * 0.14;
+    chassisGroup.add(cap);
+  }
 
   const roofCapLen = Math.max(
     0.55,

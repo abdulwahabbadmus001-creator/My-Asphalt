@@ -6,14 +6,13 @@ import {defineConfig} from 'vite';
 
 export default defineConfig(() => {
   return {
+    base: '/',
     plugins: [
       react(),
       tailwindcss(),
-      // Copies src/assets into dist/ so root-relative URLs like
-      // "/src/assets/images/..." (e.g. generate_image output) still resolve
-      // in production builds. Do not remove.
+      // Copies src/assets into dist/ and injects all built assets into dist/sw.js for 100% offline PWA
       {
-        name: 'copy-unbundled-src-assets',
+        name: 'pwa-offline-precache',
         apply: 'build',
         closeBundle(error?: Error): void {
           if (error) {
@@ -25,6 +24,33 @@ export default defineConfig(() => {
           if (fs.existsSync(distDir) && fs.existsSync(srcAssets)) {
             fs.cpSync(srcAssets, distAssets, {recursive: true, force: true});
           }
+
+          const swPath = path.join(distDir, 'sw.js');
+          if (!fs.existsSync(distDir) || !fs.existsSync(swPath)) {
+            return;
+          }
+
+          const collected: string[] = ['/'];
+          const walk = (dir: string) => {
+            for (const entry of fs.readdirSync(dir, {withFileTypes: true})) {
+              const full = path.join(dir, entry.name);
+              if (entry.isDirectory()) {
+                walk(full);
+              } else {
+                const rel = '/' + path.relative(distDir, full).replace(/\\/g, '/');
+                if (rel === '/sw.js' || rel.endsWith('.map')) continue;
+                collected.push(rel);
+              }
+            }
+          };
+          walk(distDir);
+
+          const swContent = fs.readFileSync(swPath, 'utf8');
+          const updatedSw = swContent.replace(
+            /const PRECACHE_ASSETS = \[[\s\S]*?\];/,
+            `const PRECACHE_ASSETS = ${JSON.stringify(Array.from(new Set(collected)))};`
+          );
+          fs.writeFileSync(swPath, updatedSw, 'utf8');
         },
       },
     ],
