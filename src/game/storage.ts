@@ -2,6 +2,7 @@ import {
   CAR_CATALOG,
   CAR_ORDER,
   CAR_TOOLS,
+  COMBAT_MODS,
   createDefaultToolsRecord,
   createDefaultUpgrades,
   DRIVER_CATALOG,
@@ -12,6 +13,7 @@ import type {
   CarCustomization,
   CarId,
   CarToolId,
+  CombatModId,
   DriverId,
   PlayerProfile,
   UpgradeStatKey,
@@ -45,6 +47,8 @@ export function createDefaultProfile(): PlayerProfile {
     upgrades: createDefaultUpgrades(),
     ownedTools: createDefaultToolsRecord(),
     equippedTools: createDefaultToolsRecord(),
+    ownedCombatMods: ['none'],
+    equippedCombatMod: 'none',
     customizations,
     unlockedTournaments: ['rookie_street'],
     trophies: [],
@@ -54,6 +58,23 @@ export function createDefaultProfile(): PlayerProfile {
     muted: false,
     musicEnabled: true,
     touchControlsEnabled: isCoarsePointer,
+    hapticsEnabled: true,
+    radioStation: 'cyber_synth',
+    hudLayout: {
+      scale: 1.0,
+      opacity: 0.85,
+      joystickOffset: { x: 0, y: 0 },
+      pedalsOffset: { x: 0, y: 0 },
+    },
+    dailyMedals: {},
+    lifetimeStats: {
+      ringOuts: 0,
+      wrecks: 0,
+      barrelRolls: 0,
+      topSpeedKmh: 0,
+      policeEscapes: 0,
+      bossWins: 0,
+    },
   };
 }
 
@@ -157,6 +178,14 @@ export function migrateProfileData(
     upgrades: mergedUpgrades,
     ownedTools: mergedOwnedTools,
     equippedTools: mergedEquippedTools,
+    ownedCombatMods:
+      Array.isArray(parsed.ownedCombatMods) && parsed.ownedCombatMods.length > 0
+        ? (Array.from(new Set(['none', ...parsed.ownedCombatMods])) as CombatModId[])
+        : ['none'],
+    equippedCombatMod:
+      typeof parsed.equippedCombatMod === 'string' && parsed.equippedCombatMod in COMBAT_MODS
+        ? (parsed.equippedCombatMod as CombatModId)
+        : 'none',
     customizations: mergedCustomizations,
   };
 }
@@ -312,5 +341,35 @@ export function updateCarCustomizationInProfile(
         ...patch,
       },
     },
+  };
+}
+
+export function buyOrEquipCombatModInProfile(
+  profile: PlayerProfile,
+  modId: CombatModId
+): PlayerProfile {
+  const owned = profile.ownedCombatMods ?? ['none'];
+  if (owned.includes(modId)) {
+    const nextEquipped = profile.equippedCombatMod === modId ? 'none' : modId;
+    return {
+      ...profile,
+      equippedCombatMod: nextEquipped,
+    };
+  }
+  const spec = COMBAT_MODS[modId];
+  if (!spec || profile.cash < spec.price) return profile;
+  return {
+    ...profile,
+    cash: profile.cash - spec.price,
+    ownedCombatMods: [...owned, modId],
+    equippedCombatMod: modId,
+  };
+}
+
+export function unlockCarFromBossInProfile(profile: PlayerProfile, carId: CarId): PlayerProfile {
+  if (profile.unlockedCars.includes(carId)) return profile;
+  return {
+    ...profile,
+    unlockedCars: [...profile.unlockedCars, carId],
   };
 }

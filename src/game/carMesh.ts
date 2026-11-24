@@ -1,7 +1,21 @@
 import * as THREE from 'three';
+import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { CAR_CATALOG } from './catalog';
+import { createLiveryTexture } from './livery';
 import { createCarbonFiberTexture, createMetallicFlakeRoughnessMap } from './textures';
 import type { CarCustomization, CarId, PaintFinish } from './types';
+
+let sharedGltfLoader: GLTFLoader | null = null;
+function getGltfLoader(): GLTFLoader {
+  if (!sharedGltfLoader) {
+    sharedGltfLoader = new GLTFLoader();
+    const draco = new DRACOLoader();
+    draco.setDecoderPath('/draco/');
+    sharedGltfLoader.setDRACOLoader(draco);
+  }
+  return sharedGltfLoader;
+}
 
 export interface CarVisualRig {
   root: THREE.Group;
@@ -493,6 +507,26 @@ function applyFinishToMaterial(
     if (mat instanceof THREE.MeshPhysicalMaterial) {
       mat.clearcoat = 0.14;
       mat.clearcoatRoughness = 0.48;
+      mat.iridescence = 0;
+    }
+  } else if (finish === 'gloss') {
+    mat.metalness = 0.18;
+    mat.roughness = 0.08;
+    mat.roughnessMap = null;
+    if (mat instanceof THREE.MeshPhysicalMaterial) {
+      mat.clearcoat = 1.0;
+      mat.clearcoatRoughness = 0.04;
+      mat.iridescence = 0;
+    }
+  } else if (finish === 'chameleon') {
+    mat.metalness = 0.78;
+    mat.roughness = 0.16;
+    mat.roughnessMap = flakeMap;
+    if (mat instanceof THREE.MeshPhysicalMaterial) {
+      mat.clearcoat = 1.0;
+      mat.clearcoatRoughness = 0.05;
+      mat.iridescence = 1.0;
+      mat.iridescenceIOR = 1.45;
     }
   } else {
     mat.metalness = 0.68;
@@ -501,6 +535,7 @@ function applyFinishToMaterial(
     if (mat instanceof THREE.MeshPhysicalMaterial) {
       mat.clearcoat = 1.0;
       mat.clearcoatRoughness = 0.08;
+      mat.iridescence = 0;
     }
   }
   mat.needsUpdate = true;
@@ -700,19 +735,25 @@ export function buildCarRig(
   carId: CarId,
   custom: CarCustomization,
   hasActiveAero = false,
-  options: { useClearcoat?: boolean; includeContactShadow?: boolean } = {}
+  options: { useClearcoat?: boolean; includeContactShadow?: boolean; isPolice?: boolean } = {}
 ): CarVisualRig {
-  const { useClearcoat = true, includeContactShadow = true } = options;
+  const { useClearcoat = true, includeContactShadow = true, isPolice = false } = options;
   const profile = SILHOUETTES[carId] ?? SILHOUETTES.civic_gt;
   const spec = CAR_CATALOG[carId] ?? CAR_CATALOG.civic_gt;
   const root = new THREE.Group();
   const chassisGroup = new THREE.Group();
+  const rideDrop =
+    custom.rideHeight === 'slammed' ? -0.075 : custom.rideHeight === 'lowered' ? -0.04 : 0;
+  chassisGroup.position.y = rideDrop;
   root.add(chassisGroup);
 
   const flakeMap = createMetallicFlakeRoughnessMap(4);
+  const liveryMap = custom.livery ? createLiveryTexture(custom.bodyColor, custom.livery) : null;
+  const bodyColorHex = isPolice ? '#0f172a' : custom.bodyColor;
   const bodyMaterial = useClearcoat
     ? new THREE.MeshPhysicalMaterial({
-        color: new THREE.Color(custom.bodyColor),
+        color: new THREE.Color(liveryMap ? '#ffffff' : bodyColorHex),
+        map: liveryMap,
         metalness: 0.68,
         roughness: 0.24,
         roughnessMap: flakeMap,
@@ -721,13 +762,63 @@ export function buildCarRig(
         reflectivity: 1.0,
       })
     : new THREE.MeshStandardMaterial({
-        color: new THREE.Color(custom.bodyColor),
+        color: new THREE.Color(liveryMap ? '#ffffff' : bodyColorHex),
+        map: liveryMap,
         metalness: 0.68,
         roughness: 0.24,
         roughnessMap: flakeMap,
         envMapIntensity: 1.15,
       });
   applyFinishToMaterial(bodyMaterial, custom.finish, flakeMap);
+
+  if (isPolice) {
+    // Police Interceptor Cruiser: alternating red/blue roof lightbar + bull-bar bumper
+    const barRed = new THREE.Mesh(
+      new THREE.BoxGeometry(0.45, 0.1, 0.22),
+      new THREE.MeshBasicMaterial({ color: 0xef4444 })
+    );
+    barRed.position.set(-0.24, profile.roofY + 0.1, 0.05);
+    chassisGroup.add(barRed);
+
+    const barBlue = new THREE.Mesh(
+      new THREE.BoxGeometry(0.45, 0.1, 0.22),
+      new THREE.MeshBasicMaterial({ color: 0x3b82f6 })
+    );
+    barBlue.position.set(0.24, profile.roofY + 0.1, 0.05);
+    chassisGroup.add(barBlue);
+
+    const bullBar = new THREE.Mesh(
+      new THREE.BoxGeometry(profile.bodyWidth * 0.85, 0.24, 0.16),
+      new THREE.MeshStandardMaterial({ color: 0x1e293b, metalness: 0.8, roughness: 0.3 })
+    );
+    bullBar.position.set(0, 0.36, profile.noseZ + 0.08);
+    chassisGroup.add(bullBar);
+  }
+
+  // Non-blocking GLB model check (upgrades procedural mesh if /models/<carId>.glb exists offline)
+  if (typeof fetch === 'function' && !isPolice) {
+    const glbUrl = `/models/${carId}.glb`;
+    fetch(glbUrl, { method: 'HEAD' })
+      .then((res) => {
+        if (!res.ok) return;
+        getGltfLoader().load(
+          glbUrl,
+          (gltf) => {
+            gltf.scene.traverse((child) => {
+              const m = child as THREE.Mesh;
+              if (m.isMesh && m.material) {
+                m.castShadow = true;
+              }
+            });
+            chassisGroup.clear();
+            chassisGroup.add(gltf.scene);
+          },
+          undefined,
+          () => {}
+        );
+      })
+      .catch(() => {});
+  }
 
   const carbonMat = new THREE.MeshStandardMaterial({
     color: 0xffffff,
@@ -1685,4 +1776,7 @@ export function applyCarCustomization(
   if (typeof hasActiveAero === 'boolean') {
     rig.activeAeroGroup.visible = hasActiveAero;
   }
+  const rideDrop =
+    custom.rideHeight === 'slammed' ? -0.075 : custom.rideHeight === 'lowered' ? -0.04 : 0;
+  rig.chassisGroup.position.y = rideDrop;
 }

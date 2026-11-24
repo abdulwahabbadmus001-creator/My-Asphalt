@@ -30,6 +30,8 @@ import {
   type RaceWorld,
   stepRaceWorld,
 } from './physics';
+import { ActionReplayRecorder, type ReplayFrame } from './replay';
+import { SpeedPostShader } from './shaders';
 import {
   createProceduralSkyCubemap,
   createShowroomFloorTexture,
@@ -41,6 +43,7 @@ import type {
   CameraMode,
   CarCustomization,
   CarId,
+  DailyMutatorId,
   DriverId,
   GraphicsQuality,
   HudTelemetry,
@@ -53,6 +56,7 @@ import type {
   TournamentId,
   TrackGhostRecord,
   TrackId,
+  WeatherTimeOfDay,
 } from './types';
 
 interface SparkParticle {
@@ -221,11 +225,16 @@ export class GameSceneManager {
   private envCubeTex: THREE.CubeTexture | null = null;
   private currentEnvTheme: TrackId | 'showroom' | null = null;
 
-  // Post-processing composer (Bloom + Photo Mode Motion Blur / Color Grading)
+  // Post-processing composer (Bloom + Speed Post + Photo Mode)
   private composer: EffectComposer;
   private bloomPass: UnrealBloomPass;
+  private speedPass: ShaderPass;
   private photoPass: ShaderPass;
   private cssRotated = false;
+  private playerCubeTarget: THREE.WebGLCubeRenderTarget;
+  private playerCubeCam: THREE.CubeCamera;
+  private cubeFrameCounter = 0;
+  private replayRecorder = new ActionReplayRecorder();
 
   private hemiLight: THREE.HemisphereLight;
   private sunLight: THREE.DirectionalLight;
@@ -274,6 +283,8 @@ export class GameSceneManager {
   private lastCountdownBeep = 4;
   private raceFinishedDispatched = false;
   private shockwavePulsePhase = 0;
+  private hitStopTimer = 0;
+  private takedownSlowmoTimer = 0;
 
   // Ghost Replay & Recorder
   private ghostRecorder = new GhostLapRecorder();
@@ -361,10 +372,18 @@ export class GameSceneManager {
     );
     this.bloomPass = new UnrealBloomPass(bloomRes, 0.42, 0.35, 0.85);
     this.composer.addPass(this.bloomPass);
+    this.speedPass = new ShaderPass(SpeedPostShader);
+    this.composer.addPass(this.speedPass);
     this.composer.addPass(new OutputPass());
     this.photoPass = new ShaderPass(PhotoPostShader);
     this.photoPass.enabled = false;
     this.composer.addPass(this.photoPass);
+
+    this.playerCubeTarget = new THREE.WebGLCubeRenderTarget(128, {
+      generateMipmaps: true,
+      minFilter: THREE.LinearMipmapLinearFilter,
+    });
+    this.playerCubeCam = new THREE.CubeCamera(0.5, 400, this.playerCubeTarget);
 
     this.hemiLight = new THREE.HemisphereLight(0xbae6fd, 0x0f172a, 1.05);
     this.scene.add(this.hemiLight);
@@ -567,10 +586,32 @@ export class GameSceneManager {
   }
 
   public cycleCameraMode(): CameraMode {
-    const order: CameraMode[] = ['chase', 'hood', 'far'];
+    const order: CameraMode[] = ['far', 'chase', 'hood', 'bumper'];
     const idx = order.indexOf(this.cameraMode);
     this.cameraMode = order[(idx + 1) % order.length];
     return this.cameraMode;
+  }
+
+  public getReplayRecorder(): ActionReplayRecorder {
+    return this.replayRecorder;
+  }
+
+  public applyReplayFrame(frame: ReplayFrame): void {
+    if (!this.raceWorld) return;
+    for (const snap of frame.racers) {
+      const rig = this.racerRigs.get(snap.id);
+      if (!rig) continue;
+      const sample = sampleTrackAtDistance(this.raceWorld.track, snap.s);
+      rig.root.visible = !snap.eliminated;
+      rig.root.position.set(
+        sample.pos.x + sample.right.x * snap.d,
+        sample.pos.y + snap.yOffset,
+        sample.pos.z + sample.right.z * snap.d
+      );
+      rig.root.rotation.y = snap.worldYaw + snap.airSpinAngle;
+      rig.chassisGroup.rotation.z = snap.bodyRoll + snap.airRollAngle;
+      rig.chassisGroup.rotation.x = snap.bodyPitch;
+    }
   }
 
   public getCameraMode(): CameraMode {
@@ -938,6 +979,8 @@ export class GameSceneManager {
   public startRace(opts: {
     mode: RaceMode;
     trackId: TrackId;
+    weatherTime?: WeatherTimeOfDay;
+    dailyMutator?: DailyMutatorId;
     profile: PlayerProfile;
     tournamentId?: TournamentId;
     raceIndex?: number;
@@ -958,6 +1001,8 @@ export class GameSceneManager {
     this.lastCountdownBeep = 4;
     this.shakeIntensity = 0;
     this.shockwavePulsePhase = 0;
+    this.hitStopTimer = 0;
+    this.takedownSlowmoTimer = 0;
     this.p2pManager?.resetRemoteState();
 
     this.showroomGroup.visible = false;
@@ -968,37 +1013,50 @@ export class GameSceneManager {
 
     const world = createRaceWorld(opts);
     this.raceWorld = world;
+    this.replayRecorder.reset();
 
     const maxAniso = this.renderer.capabilities.getMaxAnisotropy();
-    this.trackVisuals = buildTrackScene(world.track, this.quality, maxAniso);
+    this.trackVisuals = buildTrackScene(world.track, this.quality, maxAniso, world.weatherTime);
     this.raceGroup.add(this.trackVisuals.group);
 
-    this.scene.background = new THREE.Color(this.trackVisuals.skyColor);
-    const fogDensity = opts.trackId === 'night' ? 0.0038 : opts.trackId === 'desert' ? 0.0022 : 0.0025;
-    this.scene.fog = new THREE.FogExp2(this.trackVisuals.fogColor, fogDensity);
-    this.hemiLight.color.setHex(this.trackVisuals.hemiSky);
+    const weather = world.weatherTime;
+    const skyHex =
+      weather === 'storm' ? 0x060914 : weather === 'sunset' ? 0x7c2d12 : this.trackVisuals.skyColor;
+    const fogHex =
+      weather === 'storm' ? 0x0b1024 : weather === 'sunset' ? 0x9a3412 : this.trackVisuals.fogColor;
+    this.scene.background = new THREE.Color(skyHex);
+    const fogDensity =
+      weather === 'storm' ? 0.004 : weather === 'sunset' ? 0.0024 : opts.trackId === 'night' ? 0.0038 : 0.0023;
+    this.scene.fog = new THREE.FogExp2(fogHex, fogDensity);
+    this.hemiLight.color.setHex(
+      weather === 'storm' ? 0x38bdf8 : weather === 'sunset' ? 0xfdba74 : this.trackVisuals.hemiSky
+    );
     this.hemiLight.groundColor.setHex(this.trackVisuals.hemiGround);
-    this.hemiLight.intensity = this.trackVisuals.hemiIntensity;
+    this.hemiLight.intensity = weather === 'storm' ? 0.78 : this.trackVisuals.hemiIntensity;
 
-    this.sunLight.color.setHex(this.trackVisuals.sunColor);
-    this.sunLight.intensity = this.trackVisuals.sunIntensity;
+    this.sunLight.color.setHex(
+      weather === 'storm' ? 0x93c5fd : weather === 'sunset' ? 0xfb923c : this.trackVisuals.sunColor
+    );
+    this.sunLight.intensity = weather === 'storm' ? 1.35 : this.trackVisuals.sunIntensity;
     this.sunLight.position.copy(this.trackVisuals.sunPosition);
 
     // Spawn all 3D car rigs (clearcoat in high-spec desktop, standard PBR on mobile for 60 FPS)
     const useClearcoatInRace = !this.isMobileViewport() && this.quality === 'high';
     for (const racer of world.racers) {
-      const rig = buildCarRig(
-        racer.carId,
-        {
-          bodyColor: racer.bodyColor,
-          finish: racer.finish,
-          rimColor: racer.rimColor,
-          caliperColor: racer.caliperColor,
-          underglowColor: racer.underglowColor,
-        },
-        racer.hasActiveAero,
-        { useClearcoat: useClearcoatInRace, includeContactShadow: true }
-      );
+      const custom = racer.isPlayer
+        ? opts.profile.customizations[racer.carId]
+        : {
+            bodyColor: racer.bodyColor,
+            finish: racer.finish,
+            rimColor: racer.rimColor,
+            caliperColor: racer.caliperColor,
+            underglowColor: racer.underglowColor,
+          };
+      const rig = buildCarRig(racer.carId, custom, racer.hasActiveAero, {
+        useClearcoat: useClearcoatInRace,
+        includeContactShadow: true,
+        isPolice: racer.isPolice,
+      });
       rig.root.position.set(racer.worldPos.x, racer.worldPos.y, racer.worldPos.z);
       rig.root.rotation.y = racer.worldYaw;
       this.raceGroup.add(rig.root);
@@ -1300,7 +1358,19 @@ export class GameSceneManager {
     if (!world) return;
 
     if (!this.paused) {
-      const totalStep = Math.min(dt, 0.25);
+      if (this.hitStopTimer > 0) {
+        this.hitStopTimer = Math.max(0, this.hitStopTimer - dt);
+        this.updateSparks(dt);
+        this.updateTireSmoke(dt);
+        return;
+      }
+
+      const timeScale = this.takedownSlowmoTimer > 0 ? 0.35 : 1.0;
+      if (this.takedownSlowmoTimer > 0) {
+        this.takedownSlowmoTimer = Math.max(0, this.takedownSlowmoTimer - dt);
+      }
+
+      const totalStep = Math.min(dt * timeScale, 0.25);
       const subSteps = Math.max(1, Math.ceil(totalStep / 0.05));
       const subDt = totalStep / subSteps;
 
@@ -1388,6 +1458,27 @@ export class GameSceneManager {
           this.shakeIntensity = Math.max(this.shakeIntensity, 0.62);
           gamepadManager.triggerRumble(1.0, 0.85, 320);
           takedownSentThisFrame = true;
+          this.takedownSlowmoTimer = 0.75;
+        }
+        if (events.playerSplashdown) {
+          audioEngine.playWaterSplash();
+        }
+        if (events.playerShuntTriggered) {
+          audioEngine.playShuntSlam();
+          this.shakeIntensity = Math.max(this.shakeIntensity, 0.28);
+        }
+        if (events.playerOverdriveRestart) {
+          audioEngine.playOverdriveSurge();
+        }
+        if (events.empBlastTriggered) {
+          audioEngine.playEmpPulse();
+        }
+        if (events.eliminationBoom) {
+          audioEngine.playEliminationBoom();
+          this.shakeIntensity = Math.max(this.shakeIntensity, 0.55);
+        }
+        if (events.hitStopSec > 0) {
+          this.hitStopTimer = Math.max(this.hitStopTimer, events.hitStopSec);
         }
         if (events.playerPickupKind === 'coin') {
           audioEngine.playCoinChime();
@@ -1403,8 +1494,16 @@ export class GameSceneManager {
         for (const col of events.collisions) {
           this.spawnSparks(
             col.pos,
-            col.type === 'takedown' ? 30 : col.type === 'smash' ? 18 : 12
+            col.type === 'splashdown' ? 28 : col.type === 'takedown' ? 30 : col.type === 'smash' ? 18 : 12
           );
+          if (col.type === 'splashdown') {
+            for (let s = 0; s < 14; s++) {
+              this.spawnTireSmoke(col.pos, Math.random() * Math.PI * 2);
+            }
+            if (col.involvesPlayer) {
+              audioEngine.playWaterSplash();
+            }
+          }
           if (col.involvesPlayer) {
             if (col.type === 'smash') {
               audioEngine.playBarrierSmash();
@@ -1469,16 +1568,27 @@ export class GameSceneManager {
       this.smokeCooldown -= dt;
       this.shockwavePulsePhase += dt * 11;
 
-      // Sync all 3D car rigs (articulated suspension, wheel steer/spin, glowing brake rotors, smoke)
+      // Sync all 3D car rigs (articulated suspension, wheel steer/spin, glowing brake rotors, smoke, damage & stunts)
       for (const racer of world.racers) {
         const rig = this.racerRigs.get(racer.id);
         if (!rig) continue;
 
+        rig.root.visible =
+          !racer.eliminated &&
+          (racer.respawnImmunityTimer <= 0 || Math.floor(now / 85) % 2 === 0);
         rig.root.position.set(racer.worldPos.x, racer.worldPos.y, racer.worldPos.z);
-        rig.root.rotation.y = racer.worldYaw;
-        rig.chassisGroup.position.y = racer.suspensionHeave;
-        rig.chassisGroup.rotation.z = racer.bodyRoll;
+        rig.root.rotation.y = racer.worldYaw + racer.airSpinAngle;
+        const breakdownTilt = racer.isBrokenDown ? Math.sin(now * 0.025) * 0.08 : 0;
+        rig.chassisGroup.position.y = racer.suspensionHeave + (racer.rideHeight === 'slammed' ? -0.075 : racer.rideHeight === 'lowered' ? -0.04 : 0);
+        rig.chassisGroup.rotation.z = racer.bodyRoll + racer.airRollAngle + breakdownTilt;
         rig.chassisGroup.rotation.x = racer.bodyPitch;
+
+        if ((racer.integrity < 50 || racer.isBrokenDown) && !racer.eliminated && this.smokeCooldown <= 0) {
+          this.spawnTireSmoke(racer.worldPos, racer.worldYaw);
+          if (racer.isBrokenDown) {
+            this.spawnSparks(racer.worldPos, 2);
+          }
+        }
 
         for (const pivot of rig.frontWheelPivots) {
           pivot.rotation.y = -racer.steerAngle;
@@ -1573,10 +1683,36 @@ export class GameSceneManager {
       this.updateSparks(dt);
       this.updateTireSmoke(dt);
       this.updateRain(dt, now);
+      if (this.trackVisuals?.oceanMaterial) {
+        this.trackVisuals.oceanMaterial.uniforms.uTime.value = now * 0.001;
+      }
+      if (world.phase === 'racing') {
+        this.replayRecorder.record(world.raceTime, world.racers);
+      }
     }
 
     // Update Chase Camera (unless frozen in Photo Mode)
     const player = getPlayerRacer(world);
+    const playerSpeedRatio = Math.min(1, Math.max(0, player.speed / Math.max(1, player.perf.maxSpeedMps)));
+    this.speedPass.uniforms.uIntensity.value =
+      Math.max(0, (playerSpeedRatio - 0.55) * 1.4) + (player.isShockwave ? 0.55 : player.isNitroActive ? 0.28 : 0);
+    this.speedPass.uniforms.uChromatic.value =
+      player.isShockwave ? 1.0 : player.isNitroActive ? 0.45 : Math.max(0, (playerSpeedRatio - 0.72) * 0.6);
+
+    // Update live 128x128 CubeCamera every 3 frames for clearcoat paint reflections on desktop high quality
+    if (!this.isMobileViewport() && this.quality === 'high') {
+      this.cubeFrameCounter++;
+      if (this.cubeFrameCounter % 3 === 0) {
+        const playerRig = this.racerRigs.get(player.id);
+        if (playerRig) {
+          playerRig.root.visible = false;
+          this.playerCubeCam.position.set(player.worldPos.x, player.worldPos.y + 0.9, player.worldPos.z);
+          this.playerCubeCam.update(this.renderer, this.scene);
+          playerRig.root.visible = !player.eliminated;
+          playerRig.bodyMaterial.envMap = this.playerCubeTarget.texture;
+        }
+      }
+    }
     if (!this.photoSettings.active) {
       this.updateChaseCameraForRacer(
         player,
@@ -1681,6 +1817,20 @@ export class GameSceneManager {
       cam.position.copy(posSmooth);
       cam.lookAt(lookSmooth);
       targetFov = 50;
+    } else if (isPrimary && this.cameraMode === 'bumper') {
+      cam.position.set(
+        racer.worldPos.x + fwdX * 2.15 + shakeX * 0.25,
+        racer.worldPos.y + 0.56 + shakeY * 0.25,
+        racer.worldPos.z + fwdZ * 2.15
+      );
+      cam.lookAt(
+        racer.worldPos.x + fwdX * 42,
+        racer.worldPos.y + 0.52,
+        racer.worldPos.z + fwdZ * 42
+      );
+      targetFov = racer.isShockwave
+        ? 88
+        : 68 + speedRatio * 16 + (racer.isNitroActive ? 5 : 0);
     } else if (isPrimary && this.cameraMode === 'hood') {
       cam.position.set(
         racer.worldPos.x + fwdX * 0.55 + shakeX * 0.25,
@@ -1889,6 +2039,7 @@ export class GameSceneManager {
     this.envRT?.dispose();
     this.envCubeTex?.dispose();
     this.pmremGenerator.dispose();
+    this.playerCubeTarget.dispose();
     this.composer.dispose();
     this.renderer.dispose();
     if (this.renderer.domElement.parentNode === this.container) {

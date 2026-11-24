@@ -1,4 +1,11 @@
-import type { CarId, GhostFrame, RacerState, TrackGhostRecord, TrackId } from './types';
+import type {
+  CarCustomization,
+  CarId,
+  GhostFrame,
+  RacerState,
+  TrackGhostRecord,
+  TrackId,
+} from './types';
 
 const GHOST_STORAGE_KEY = 'my_asphalt_ghosts_v1';
 const SAMPLE_INTERVAL_SEC = 0.1; // 10Hz compact lap recording
@@ -138,5 +145,94 @@ export class GhostLapRecorder {
     };
     this.reset();
     return record;
+  }
+}
+
+export interface DecodedGhostChallenge {
+  record: TrackGhostRecord;
+  custom?: CarCustomization;
+}
+
+/**
+ * Encodes a personal-best ghost lap into a compact shareable offline challenge code (MA-GHOST-...).
+ */
+export function encodeGhostChallengeCode(
+  record: TrackGhostRecord,
+  custom?: CarCustomization
+): string {
+  const step = Math.max(1, Math.floor(record.frames.length / 80));
+  const compactFrames: number[][] = [];
+  for (let i = 0; i < record.frames.length; i += step) {
+    const f = record.frames[i];
+    compactFrames.push([
+      Math.round(f.t * 100),
+      Math.round(f.s * 10),
+      Math.round(f.d * 10),
+      Math.round(f.y * 10),
+      Math.round(f.yaw * 100),
+      Math.round(f.pitch * 100),
+      Math.round(f.roll * 100),
+    ]);
+  }
+  const payload = {
+    v: 1,
+    tid: record.trackId,
+    cid: record.carId,
+    col: record.bodyColor,
+    lt: Math.round(record.lapTime * 1000),
+    cust: custom,
+    f: compactFrames,
+  };
+  const json = JSON.stringify(payload);
+  const b64 =
+    typeof btoa === 'function'
+      ? btoa(unescape(encodeURIComponent(json)))
+      : Buffer.from(json, 'utf8').toString('base64');
+  return `MA-GHOST-${b64}`;
+}
+
+export function decodeGhostChallengeCode(code: string): DecodedGhostChallenge | null {
+  try {
+    const trimmed = code.trim();
+    if (!trimmed.startsWith('MA-GHOST-')) return null;
+    const b64 = trimmed.slice('MA-GHOST-'.length);
+    const json =
+      typeof atob === 'function'
+        ? decodeURIComponent(escape(atob(b64)))
+        : Buffer.from(b64, 'base64').toString('utf8');
+    const parsed = JSON.parse(json) as {
+      v?: number;
+      tid?: TrackId;
+      cid?: CarId;
+      col?: string;
+      lt?: number;
+      cust?: CarCustomization;
+      f?: number[][];
+    };
+    if (!parsed.tid || !parsed.cid || !Array.isArray(parsed.f) || parsed.f.length < 2) {
+      return null;
+    }
+    const frames: GhostFrame[] = parsed.f.map((row) => ({
+      t: (row[0] ?? 0) / 100,
+      s: (row[1] ?? 0) / 10,
+      d: (row[2] ?? 0) / 10,
+      y: (row[3] ?? 0) / 10,
+      yaw: (row[4] ?? 0) / 100,
+      pitch: (row[5] ?? 0) / 100,
+      roll: (row[6] ?? 0) / 100,
+    }));
+    return {
+      record: {
+        trackId: parsed.tid,
+        carId: parsed.cid,
+        bodyColor: parsed.col ?? '#38bdf8',
+        lapTime: (parsed.lt ?? 60000) / 1000,
+        recordedAt: Date.now(),
+        frames,
+      },
+      custom: parsed.cust,
+    };
+  } catch {
+    return null;
   }
 }

@@ -1,9 +1,11 @@
-import { ArrowRight, Camera, Flag, Home, RotateCcw, Sparkles, Trophy, Wrench } from 'lucide-react';
+import { ArrowRight, Camera, Flag, Home, RotateCcw, Share2, Sparkles, Trophy, Wrench } from 'lucide-react';
+import { useState } from 'react';
 import { TOURNAMENT_CATALOG, TRACK_CATALOG } from '../game/catalog';
 import type { RaceResultSummary } from '../game/types';
 
 interface PodiumScreenProps {
   summary: RaceResultSummary;
+  onShareGhostCode?: () => Promise<string | null>;
   onNextRace: () => void;
   onRetryRace: () => void;
   onOpenPhotoMode: () => void;
@@ -24,6 +26,7 @@ function formatTime(sec: number | null): string {
 
 export function PodiumScreen({
   summary,
+  onShareGhostCode,
   onNextRace,
   onRetryRace,
   onOpenPhotoMode,
@@ -38,6 +41,7 @@ export function PodiumScreen({
     : null;
   const isPodium = summary.playerPlace <= 3;
   const st = summary.stuntStats;
+  const [ghostCopied, setGhostCopied] = useState(false);
 
   return (
     <div className="fixed inset-0 z-20 flex flex-col justify-between overflow-y-auto bg-[#060911]/92 p-4 sm:p-5">
@@ -286,6 +290,22 @@ export function PodiumScreen({
             <Camera className="h-4 w-4" />
             <span>Photo Mode</span>
           </button>
+          {onShareGhostCode && (
+            <button
+              type="button"
+              onClick={async () => {
+                const code = await onShareGhostCode();
+                if (code) {
+                  setGhostCopied(true);
+                  window.setTimeout(() => setGhostCopied(false), 2200);
+                }
+              }}
+              className="carbon-panel flex items-center gap-1.5 whitespace-nowrap rounded-xl border border-fuchsia-400/70 bg-fuchsia-500/15 px-3.5 py-2.5 text-xs font-black uppercase tracking-wider text-fuchsia-200 transition hover:bg-fuchsia-500/25"
+            >
+              <Share2 className="h-4 w-4" />
+              <span>{ghostCopied ? 'Ghost Code Copied!' : 'Share Ghost Code'}</span>
+            </button>
+          )}
         </div>
 
         <div className="flex items-center gap-2">

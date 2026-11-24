@@ -11,14 +11,16 @@ import {
   createRampTexture,
   createWetRoadRoughnessTexture,
 } from './textures';
+import { createOceanShaderMaterial, createSkyDomeMaterial } from './shaders';
 import { sampleTrackAtDistance, type TrackData } from './tracks';
-import type { GraphicsQuality, TrackId } from './types';
+import type { GraphicsQuality, TrackId, WeatherTimeOfDay } from './types';
 
 export interface TrackVisualObjects {
   group: THREE.Group;
   pickupMeshes: THREE.Object3D[];
   smashableMeshes: THREE.Object3D[];
   puddleMaterials: THREE.MeshPhysicalMaterial[];
+  oceanMaterial: THREE.ShaderMaterial | null;
   rainSystem: {
     mesh: THREE.InstancedMesh;
     offsets: Float32Array;
@@ -139,11 +141,13 @@ function buildRampWedgeGeometry(width: number, length: number, height: number): 
 export function buildTrackScene(
   track: TrackData,
   quality: GraphicsQuality,
-  maxAniso: number
+  maxAniso: number,
+  weatherTime: WeatherTimeOfDay = 'noon'
 ): TrackVisualObjects {
   const group = new THREE.Group();
   const disposables: { dispose: () => void }[] = [];
   const puddleMaterials: THREE.MeshPhysicalMaterial[] = [];
+  let oceanMaterial: THREE.ShaderMaterial | null = null;
   const trackId: TrackId = track.id;
 
   const halfRoad = track.roadWidth * 0.5;
@@ -167,35 +171,43 @@ export function buildTrackScene(
   group.add(ground);
 
   if (trackId === 'coastal') {
-    const seaGeo = new THREE.PlaneGeometry(1800, 1800);
-    const seaMat = new THREE.MeshStandardMaterial({
-      color: 0x0284c7,
-      roughness: 0.2,
-      metalness: 0.35,
-    });
-    disposables.push(seaGeo, seaMat);
-    const sea = new THREE.Mesh(seaGeo, seaMat);
+    const seaGeo = new THREE.PlaneGeometry(1800, 1800, 48, 48);
+    oceanMaterial = createOceanShaderMaterial();
+    disposables.push(seaGeo, oceanMaterial);
+    const sea = new THREE.Mesh(seaGeo, oceanMaterial);
     sea.rotation.x = -Math.PI / 2;
     sea.position.set(520, -0.3, 0);
     group.add(sea);
   }
+
+  // Atmospheric Rayleigh/Mie Sky Dome
+  const skyDomeGeo = new THREE.SphereGeometry(540, 24, 16);
+  const zenithHex =
+    weatherTime === 'storm' ? 0x050816 : weatherTime === 'sunset' ? 0x4c1d95 : trackId === 'night' ? 0x050816 : 0x0284c7;
+  const horizonHex =
+    weatherTime === 'storm' ? 0x1e1b4b : weatherTime === 'sunset' ? 0xf97316 : trackId === 'desert' ? 0xfdba74 : 0xbae6fd;
+  const sunHex = weatherTime === 'storm' ? 0x38bdf8 : 0xfffbeb;
+  const skyDomeMat = createSkyDomeMaterial(zenithHex, horizonHex, sunHex);
+  disposables.push(skyDomeGeo, skyDomeMat);
+  const skyDome = new THREE.Mesh(skyDomeGeo, skyDomeMat);
+  group.add(skyDome);
 
   // 2. Main Road Asphalt Ribbon
   const asphaltTex = createAsphaltTexture(trackId, maxAniso);
   disposables.push(asphaltTex);
   const roadGeo = buildRibbonGeometry(track, -halfRoad, halfRoad, 0.04, 18);
   let roadMat: THREE.Material;
-  if (trackId === 'night') {
+  if (trackId === 'night' || weatherTime === 'storm') {
     const wetRoughTex = createWetRoadRoughnessTexture(maxAniso);
     disposables.push(wetRoughTex);
     roadMat = new THREE.MeshPhysicalMaterial({
       map: asphaltTex,
       roughnessMap: wetRoughTex,
-      roughness: 0.32,
-      metalness: 0.22,
-      clearcoat: 0.72,
-      clearcoatRoughness: 0.14,
-      envMapIntensity: 0.55,
+      roughness: 0.24,
+      metalness: 0.28,
+      clearcoat: 0.85,
+      clearcoatRoughness: 0.1,
+      envMapIntensity: 0.72,
     });
   } else {
     roadMat = new THREE.MeshStandardMaterial({
@@ -812,6 +824,7 @@ export function buildTrackScene(
     pickupMeshes,
     smashableMeshes,
     puddleMaterials,
+    oceanMaterial,
     rainSystem,
     ...theme,
     dispose: () => {

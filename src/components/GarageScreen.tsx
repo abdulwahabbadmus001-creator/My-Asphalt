@@ -7,6 +7,8 @@ import {
   CAR_TOOL_ORDER,
   CAR_TOOLS,
   CLASS_COLORS,
+  COMBAT_MOD_ORDER,
+  COMBAT_MODS,
   computeCarPerformance,
   DRIVER_CATALOG,
   getUpgradeCost,
@@ -21,6 +23,7 @@ import type {
   CarCustomization,
   CarId,
   CarToolId,
+  CombatModId,
   PlayerProfile,
   UpgradeStatKey,
 } from '../game/types';
@@ -32,6 +35,7 @@ interface GarageScreenProps {
   onBuyOrEquipCar: (carId: CarId) => void;
   onUpgradeStat: (carId: CarId, stat: UpgradeStatKey) => void;
   onBuyOrToggleTool: (carId: CarId, toolId: CarToolId) => void;
+  onBuyOrEquipCombatMod: (modId: CombatModId) => void;
   onUpdateCustomization: (carId: CarId, patch: Partial<CarCustomization>) => void;
   onBack: () => void;
 }
@@ -48,6 +52,7 @@ export function GarageScreen({
   onBuyOrEquipCar,
   onUpgradeStat,
   onBuyOrToggleTool,
+  onBuyOrEquipCombatMod,
   onUpdateCustomization,
   onBack,
 }: GarageScreenProps) {
@@ -379,13 +384,13 @@ export function GarageScreen({
                     <span>Paint Finish</span>
                     <Sparkles className="h-3.5 w-3.5 text-cyan-400" />
                   </div>
-                  <div className="grid grid-cols-2 gap-2">
-                    {(['metallic', 'matte'] as const).map((finish) => (
+                  <div className="grid grid-cols-2 gap-1.5">
+                    {(['gloss', 'metallic', 'matte', 'chameleon'] as const).map((finish) => (
                       <button
                         key={finish}
                         type="button"
                         onClick={() => onUpdateCustomization(previewCarId, { finish })}
-                        className={`rounded-lg border py-1.5 text-xs font-black uppercase tracking-wider transition ${
+                        className={`rounded-lg border py-1.5 text-[11px] font-black uppercase tracking-wider transition ${
                           custom.finish === finish
                             ? 'border-cyan-400 bg-cyan-400/20 text-cyan-100'
                             : 'border-slate-700 bg-slate-900 text-slate-400 hover:text-white'
@@ -394,6 +399,63 @@ export function GarageScreen({
                         {finish}
                       </button>
                     ))}
+                  </div>
+                </div>
+
+                {/* Ride Height / Stance */}
+                <div>
+                  <div className="mb-1.5 text-[11px] font-bold uppercase tracking-wider text-slate-300">
+                    Ride Height / Stance
+                  </div>
+                  <div className="grid grid-cols-3 gap-1.5">
+                    {(['stock', 'lowered', 'slammed'] as const).map((rideHeight) => (
+                      <button
+                        key={rideHeight}
+                        type="button"
+                        onClick={() => onUpdateCustomization(previewCarId, { rideHeight })}
+                        className={`rounded-lg border py-1 text-[10px] font-black uppercase tracking-wider transition ${
+                          (custom.rideHeight ?? 'stock') === rideHeight
+                            ? 'border-amber-400 bg-amber-400/20 text-amber-100'
+                            : 'border-slate-700 bg-slate-900 text-slate-400 hover:text-white'
+                        }`}
+                      >
+                        {rideHeight}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* 1-Slot Tactical Combat Mod */}
+                <div>
+                  <div className="mb-1.5 text-[11px] font-bold uppercase tracking-wider text-rose-300">
+                    Tactical Combat Mod (1 Slot)
+                  </div>
+                  <div className="space-y-1.5">
+                    {COMBAT_MOD_ORDER.map((modId) => {
+                      const mod = COMBAT_MODS[modId];
+                      const ownedMod = (profile.ownedCombatMods ?? ['none']).includes(modId);
+                      const eqMod = profile.equippedCombatMod === modId;
+                      return (
+                        <button
+                          key={modId}
+                          type="button"
+                          onClick={() => onBuyOrEquipCombatMod(modId)}
+                          className={`flex w-full items-center justify-between rounded-lg border px-2.5 py-1.5 text-left text-[11px] transition ${
+                            eqMod
+                              ? 'border-rose-400 bg-rose-500/20 text-white'
+                              : 'border-slate-700 bg-slate-900/90 text-slate-300 hover:border-slate-500'
+                          }`}
+                        >
+                          <div>
+                            <div className="font-black uppercase">{mod.shortName}</div>
+                            <div className="text-[10px] text-slate-400">{mod.description}</div>
+                          </div>
+                          <span className="font-telemetry ml-2 shrink-0 text-[10px] font-black text-amber-300">
+                            {eqMod ? 'EQUIPPED' : ownedMod ? 'EQUIP' : `$${mod.price}`}
+                          </span>
+                        </button>
+                      );
+                    })}
                   </div>
                 </div>
 

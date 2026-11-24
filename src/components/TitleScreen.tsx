@@ -1,4 +1,5 @@
 import {
+  Award,
   Download,
   Flag,
   Gamepad2,
@@ -10,6 +11,7 @@ import {
   VolumeX,
   Wifi,
   Wrench,
+  Zap,
 } from 'lucide-react';
 import {
   CAR_CATALOG,
@@ -19,19 +21,36 @@ import {
   TRACK_CATALOG,
   TRACK_ORDER,
 } from '../game/catalog';
-import type { GamepadStatus, GraphicsQuality, PlayerProfile, TrackId } from '../game/types';
+import { generateDailyChallenge } from '../game/dailyChallenge';
+import type {
+  GamepadStatus,
+  GraphicsQuality,
+  PlayerProfile,
+  RaceMode,
+  TrackId,
+  WeatherTimeOfDay,
+} from '../game/types';
+import { useState } from 'react';
 
 interface TitleScreenProps {
   profile: PlayerProfile;
   selectedQuickTrack: TrackId;
+  selectedQuickMode: RaceMode;
+  selectedWeather: WeatherTimeOfDay;
+  ghostImportMsg: string;
   gamepadStatus: GamepadStatus;
   onSelectQuickTrack: (trackId: TrackId) => void;
+  onSelectQuickMode: (mode: RaceMode) => void;
+  onSelectWeather: (weather: WeatherTimeOfDay) => void;
+  onImportGhostCode: (code: string) => void;
   onPlayerNameChange: (name: string) => void;
   onQuickRace: () => void;
   onOpenCareer: () => void;
   onOpenMultiplayer: () => void;
   onOpenGarage: () => void;
   onOpenDrivers: () => void;
+  onOpenLicense: () => void;
+  onStartDailyChallenge: () => void;
   onToggleMute: () => void;
   onToggleMusic: () => void;
   onToggleQuality: (q: GraphicsQuality) => void;
@@ -42,14 +61,22 @@ interface TitleScreenProps {
 export function TitleScreen({
   profile,
   selectedQuickTrack,
+  selectedQuickMode,
+  selectedWeather,
+  ghostImportMsg,
   gamepadStatus,
   onSelectQuickTrack,
+  onSelectQuickMode,
+  onSelectWeather,
+  onImportGhostCode,
   onPlayerNameChange,
   onQuickRace,
   onOpenCareer,
   onOpenMultiplayer,
   onOpenGarage,
   onOpenDrivers,
+  onOpenLicense,
+  onStartDailyChallenge,
   onToggleMute,
   onToggleMusic,
   onToggleQuality,
@@ -66,6 +93,8 @@ export function TitleScreen({
     driver.perks
   );
   const classStyle = CLASS_COLORS[car.carClass];
+  const [ghostInput, setGhostInput] = useState('');
+  const daily = generateDailyChallenge();
 
   return (
     <div className="pointer-events-none safe-area-pad fixed inset-0 z-10 flex flex-col justify-between overflow-y-auto p-3 sm:p-6">
@@ -247,9 +276,59 @@ export function TitleScreen({
           </div>
         </div>
 
-        {/* Right: 4-Track Selector + Main Action Deck */}
-        <div className="pointer-events-auto flex flex-col items-end gap-2.5">
-          {/* 4-Environment Quick Track Switcher */}
+        {/* Right: Mode + Weather + 4-Location Selector + Main Action Deck */}
+        <div className="pointer-events-auto flex flex-col items-end gap-2">
+          {/* Quick Mode & Time/Weather Selectors */}
+          <div className="flex flex-wrap items-center justify-end gap-1.5">
+            <div className="carbon-panel flex items-center gap-1 rounded-xl border border-slate-700/90 p-1">
+              {(
+                [
+                  { id: 'quick', label: 'Race' },
+                  { id: 'elimination', label: 'Elimination' },
+                  { id: 'rampage', label: 'Rampage' },
+                  { id: 'pursuit', label: 'Pursuit' },
+                ] as const
+              ).map((m) => (
+                <button
+                  key={m.id}
+                  type="button"
+                  onClick={() => onSelectQuickMode(m.id)}
+                  className={`whitespace-nowrap rounded-lg px-2 py-1 text-[10px] font-black uppercase tracking-wider transition ${
+                    selectedQuickMode === m.id
+                      ? 'bg-amber-400 text-slate-950'
+                      : 'text-slate-300 hover:bg-slate-800 hover:text-white'
+                  }`}
+                >
+                  {m.label}
+                </button>
+              ))}
+            </div>
+
+            <div className="carbon-panel flex items-center gap-1 rounded-xl border border-slate-700/90 p-1">
+              {(
+                [
+                  { id: 'noon', label: 'Noon' },
+                  { id: 'sunset', label: 'Sunset' },
+                  { id: 'storm', label: 'Storm' },
+                ] as const
+              ).map((w) => (
+                <button
+                  key={w.id}
+                  type="button"
+                  onClick={() => onSelectWeather(w.id)}
+                  className={`whitespace-nowrap rounded-lg px-2 py-1 text-[10px] font-black uppercase tracking-wider transition ${
+                    selectedWeather === w.id
+                      ? 'bg-fuchsia-500 text-white'
+                      : 'text-slate-300 hover:bg-slate-800 hover:text-white'
+                  }`}
+                >
+                  {w.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* 4-Environment Quick Location Switcher */}
           <div className="carbon-panel flex flex-wrap items-center gap-1.5 rounded-xl border border-slate-700/90 p-1.5">
             {TRACK_ORDER.map((tid) => {
               const t = TRACK_CATALOG[tid];
@@ -266,16 +345,61 @@ export function TitleScreen({
                   }`}
                 >
                   {tid === 'coastal'
-                    ? 'Coastal'
+                    ? 'Marina Coast'
                     : tid === 'desert'
-                      ? 'Desert'
+                      ? 'Red Canyon'
                       : tid === 'night'
-                        ? 'Rainy Night'
-                        : 'Alpine Pass'}
+                        ? 'Cyber Metro'
+                        : 'Alpine Peak'}
                   <span className="sr-only">{t.name}</span>
                 </button>
               );
             })}
+          </div>
+
+          {/* Offline Ghost Challenge Code Importer + Daily Mutator & License */}
+          <div className="flex flex-wrap items-center justify-end gap-1.5">
+            <button
+              type="button"
+              onClick={onStartDailyChallenge}
+              className="carbon-panel flex items-center gap-1.5 rounded-xl border border-amber-400/60 bg-amber-950/35 px-2.5 py-1 text-[10px] font-black uppercase tracking-wider text-amber-200 hover:border-amber-300"
+              title={daily.mutatorDescription}
+            >
+              <Zap className="h-3.5 w-3.5 text-amber-400" />
+              <span>Daily: {daily.mutatorLabel}</span>
+            </button>
+            <button
+              type="button"
+              onClick={onOpenLicense}
+              className="carbon-panel flex items-center gap-1 rounded-xl border border-cyan-400/50 px-2.5 py-1 text-[10px] font-black uppercase tracking-wider text-cyan-200 hover:border-cyan-300"
+            >
+              <Award className="h-3.5 w-3.5 text-cyan-400" />
+              <span>License</span>
+            </button>
+            <div className="carbon-panel flex items-center gap-1.5 rounded-xl border border-slate-700/80 px-2 py-1">
+              <input
+                type="text"
+                value={ghostInput}
+                onChange={(e) => setGhostInput(e.target.value)}
+                placeholder="Paste MA-GHOST-..."
+                className="w-32 bg-transparent text-[10px] font-bold text-cyan-200 placeholder:text-slate-500 outline-none"
+              />
+              <button
+                type="button"
+                onClick={() => {
+                  if (ghostInput.trim()) {
+                    onImportGhostCode(ghostInput.trim());
+                    setGhostInput('');
+                  }
+                }}
+                className="rounded bg-cyan-500/25 px-2 py-0.5 text-[10px] font-black uppercase text-cyan-200 hover:bg-cyan-500/40"
+              >
+                Load Ghost
+              </button>
+              {ghostImportMsg && (
+                <span className="text-[10px] font-bold text-amber-300">{ghostImportMsg}</span>
+              )}
+            </div>
           </div>
 
           {/* Primary Action Buttons */}

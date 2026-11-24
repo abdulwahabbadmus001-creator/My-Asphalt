@@ -14,9 +14,14 @@ import {
 } from 'lucide-react';
 import { useRef, useState } from 'react';
 import type { MinimapData } from '../game/tracks';
-import type { GamepadStatus, HudTelemetry, StuntPopup } from '../game/types';
+import type {
+  GamepadStatus,
+  HudTelemetry,
+  RadioStation,
+  StuntPopup,
+} from '../game/types';
 
-type DigitalInputKey = 'throttle' | 'brake' | 'left' | 'right' | 'drift' | 'nitro';
+type DigitalInputKey = 'throttle' | 'brake' | 'left' | 'right' | 'drift' | 'nitro' | 'shunt';
 
 interface RaceHudProps {
   telemetry: HudTelemetry;
@@ -31,6 +36,8 @@ interface RaceHudProps {
   isCssRotated: boolean;
   tiltEnabled: boolean;
   tiltSupported: boolean;
+  radioStation: RadioStation;
+  onCycleRadio: () => void;
   onToggleTilt: () => void;
   onAnalogSteerChange: (steer: number) => void;
   onCycleCamera: () => void;
@@ -81,6 +88,8 @@ export function RaceHud({
   isCssRotated,
   tiltEnabled,
   tiltSupported,
+  radioStation,
+  onCycleRadio,
   onToggleTilt,
   onAnalogSteerChange,
   onCycleCamera,
@@ -228,13 +237,25 @@ export function RaceHud({
             <div className="carbon-panel carbon-skew hidden flex-col justify-center rounded-lg border border-fuchsia-500/45 px-3 py-1.5 shadow-xl sm:flex">
               <div className="carbon-unskew">
                 <div className="flex items-center gap-1.5 text-[10px] font-black uppercase tracking-widest text-fuchsia-300">
-                  <span>Stunt Bonus</span>
+                  <span>Takedowns: {telemetry.takedowns}</span>
                   <span className="font-telemetry rounded bg-fuchsia-500/25 px-1 text-fuchsia-200">
                     x{telemetry.stuntMultiplier.toFixed(2)}
                   </span>
                 </div>
-                <div className="font-telemetry text-sm font-black leading-tight text-amber-300">
-                  +${telemetry.stuntCash.toLocaleString()}
+                <div className="mt-1 flex items-center gap-2">
+                  <div className="h-2 w-24 overflow-hidden rounded-full bg-slate-900 border border-slate-700">
+                    <div
+                      className="h-full transition-all duration-150"
+                      style={{
+                        width: `${Math.max(0, Math.min(100, (telemetry.integrity / Math.max(1, telemetry.maxIntegrity)) * 100))}%`,
+                        backgroundColor:
+                          telemetry.integrity < 35 ? '#ef4444' : telemetry.integrity < 65 ? '#f59e0b' : '#10b981',
+                      }}
+                    />
+                  </div>
+                  <span className="font-telemetry text-[10px] font-black text-slate-200">
+                    {telemetry.integrity}% HP
+                  </span>
                 </div>
               </div>
             </div>
@@ -251,6 +272,39 @@ export function RaceHud({
             {telemetry.hasGhost && telemetry.ghostBestLap !== null && (
               <div className="inline-flex items-center gap-1 rounded-md border border-cyan-400/60 bg-cyan-950/90 px-2 py-0.5 text-[10px] font-black uppercase tracking-wider text-cyan-200">
                 <span className="font-telemetry">GHOST PB {formatTime(telemetry.ghostBestLap)}</span>
+              </div>
+            )}
+            {telemetry.isBossFight && telemetry.bossName && (
+              <div className="inline-flex items-center gap-1 rounded-md border border-rose-500/80 bg-rose-950/90 px-2 py-0.5 text-[10px] font-black uppercase tracking-wider text-rose-200">
+                <span>1v1 BOSS: {telemetry.bossName}</span>
+              </div>
+            )}
+            {telemetry.eliminationTimer !== null && (
+              <div
+                className={`inline-flex items-center gap-1 rounded-md border px-2.5 py-0.5 text-[11px] font-black uppercase tracking-wider ${
+                  telemetry.eliminationTimer <= 5
+                    ? 'animate-pulse border-rose-400 bg-rose-950/95 text-rose-200'
+                    : 'border-amber-400/75 bg-amber-950/90 text-amber-200'
+                }`}
+              >
+                <span className="font-telemetry">ELIMINATION: {telemetry.eliminationTimer.toFixed(1)}s</span>
+              </div>
+            )}
+            {telemetry.rampageTimer !== null && (
+              <div className="inline-flex items-center gap-1 rounded-md border border-fuchsia-400/80 bg-fuchsia-950/90 px-2.5 py-0.5 text-[11px] font-black uppercase tracking-wider text-fuchsia-200">
+                <span className="font-telemetry">
+                  RAMPAGE: {telemetry.rampageTimer.toFixed(1)}s • {telemetry.takedowns} KO
+                </span>
+              </div>
+            )}
+            {typeof telemetry.heatLevel === 'number' && telemetry.heatLevel > 0 && (
+              <div className="inline-flex items-center gap-1 rounded-md border border-rose-500/80 bg-rose-950/90 px-2.5 py-0.5 text-[11px] font-black uppercase tracking-wider text-rose-200">
+                <span className="font-telemetry">HEAT LVL {telemetry.heatLevel}</span>
+                {telemetry.heliLockTimer !== null && telemetry.heliLockTimer !== undefined && (
+                  <span className="ml-1 animate-pulse text-amber-300">
+                    • HELI LOCK {telemetry.heliLockTimer.toFixed(1)}s!
+                  </span>
+                )}
               </div>
             )}
             {telemetry.shieldActive && (
@@ -309,6 +363,24 @@ export function RaceHud({
             >
               <Gamepad2 className="h-3.5 w-3.5" />
               <span className="hidden sm:inline">Touch</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={onCycleRadio}
+              className="carbon-panel flex items-center gap-1 whitespace-nowrap rounded-lg border border-fuchsia-500/50 px-2 py-1.5 text-[10px] font-black uppercase tracking-wider text-fuchsia-200 hover:border-fuchsia-400"
+              title="Switch Radio Station"
+            >
+              <Music className="h-3.5 w-3.5" />
+              <span>
+                {radioStation === 'afro_log'
+                  ? 'AFRO-LOG'
+                  : radioStation === 'drift_phonk'
+                    ? 'PHONK'
+                    : radioStation === 'cyber_synth'
+                      ? 'SYNTH'
+                      : 'RADIO OFF'}
+              </span>
             </button>
 
             <button
@@ -436,9 +508,19 @@ export function RaceHud({
         </div>
       )}
 
-      {/* Center Status Pills (Shockwave / Airborne / Drift / Wrong Way) */}
+      {/* Center Status Pills (Breakdown / Combat Banner / Shockwave / Airborne / Drift / Wrong Way) */}
       {telemetry.phase === 'racing' && (
         <div className="fixed inset-x-0 top-[20%] flex flex-col items-center gap-1.5">
+          {telemetry.isBrokenDown && (
+            <div className="animate-pulse rounded-lg border-2 border-rose-400 bg-rose-950/95 px-4 py-1 text-xs font-black uppercase tracking-widest text-rose-100 shadow-xl">
+              RECHARGING ENERGY CORE... {telemetry.breakdownProgress}%
+            </div>
+          )}
+          {telemetry.combatBanner && (
+            <div className="carbon-skew rounded-lg border-2 border-amber-400 bg-slate-950/95 px-5 py-1.5 text-sm font-black uppercase tracking-widest text-amber-300 shadow-[0_0_24px_rgba(245,158,11,0.5)]">
+              <span className="carbon-unskew block">{telemetry.combatBanner}</span>
+            </div>
+          )}
           {telemetry.wrongWay && (
             <div className="rounded-lg border border-rose-500 bg-rose-950/90 px-4 py-1 text-sm font-black uppercase tracking-widest text-rose-200">
               Wrong Way!
@@ -678,6 +760,17 @@ export function RaceHud({
                 Auto Gas
               </span>
               <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  {...bindTouch('shunt')}
+                  className={`flex h-14 w-16 touch-none flex-col items-center justify-center rounded-2xl border-2 text-[11px] font-black uppercase sm:h-16 sm:w-20 ${
+                    telemetry.shuntReady
+                      ? 'border-orange-400 bg-orange-950/65 text-orange-200 active:bg-orange-500/40'
+                      : 'border-slate-700 bg-slate-900/50 text-slate-500'
+                  }`}
+                >
+                  Shunt
+                </button>
                 <button
                   type="button"
                   {...bindTouch('brake')}

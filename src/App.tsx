@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { CareerScreen } from './components/CareerScreen';
+import { DriverLicenseModal } from './components/DriverLicenseModal';
 import { DriversScreen } from './components/DriversScreen';
 import { GarageScreen } from './components/GarageScreen';
 import { MultiplayerScreen } from './components/MultiplayerScreen';
@@ -8,6 +9,8 @@ import { PodiumScreen } from './components/PodiumScreen';
 import { RaceHud } from './components/RaceHud';
 import { TitleScreen } from './components/TitleScreen';
 import { audioEngine } from './game/audio';
+import { generateDailyChallenge } from './game/dailyChallenge';
+import { hapticsEngine } from './game/haptics';
 import { tiltSteering } from './game/tiltSteering';
 import {
   createInitialStandings,
@@ -19,6 +22,7 @@ import { OfflineP2PManager, type P2PConnectionStatus } from './game/p2p';
 import { finalizeRaceResults, type RaceWorld } from './game/physics';
 import { GameSceneManager } from './game/sceneManager';
 import {
+  buyOrEquipCombatModInProfile,
   buyOrToggleCarToolInProfile,
   loadProfile,
   recruitOrSelectDriverInProfile,
@@ -27,11 +31,19 @@ import {
   updateCarCustomizationInProfile,
   upgradeCarStatInProfile,
 } from './game/storage';
+import {
+  decodeGhostChallengeCode,
+  encodeGhostChallengeCode,
+  loadTrackGhost,
+  saveTrackGhost,
+} from './game/ghost';
 import { getTrackData } from './game/tracks';
 import type {
   CarCustomization,
   CarId,
   CarToolId,
+  CombatModId,
+  DailyMutatorId,
   DriverId,
   GamepadStatus,
   GameScreen,
@@ -42,10 +54,12 @@ import type {
   PlayerProfile,
   RaceMode,
   RaceResultSummary,
+  RadioStation,
   StuntPopup,
   TournamentId,
   TrackId,
   UpgradeStatKey,
+  WeatherTimeOfDay,
 } from './game/types';
 
 interface BeforeInstallPromptEvent extends Event {
@@ -90,6 +104,8 @@ function computeIsCssLandscapeStage(): boolean {
 interface ActiveRaceConfig {
   mode: RaceMode;
   trackId: TrackId;
+  weatherTime?: WeatherTimeOfDay;
+  dailyMutator?: DailyMutatorId;
   tournamentId?: TournamentId;
   raceIndex?: number;
   remotePeer?: {
@@ -113,6 +129,10 @@ export default function App() {
   const [selectedQuickTrack, setSelectedQuickTrack] = useState<TrackId>(() =>
     getInitialTrackFromUrl()
   );
+  const [selectedQuickMode, setSelectedQuickMode] = useState<RaceMode>('quick');
+  const [selectedWeather, setSelectedWeather] = useState<WeatherTimeOfDay>('noon');
+  const [ghostImportMsg, setGhostImportMsg] = useState<string>('');
+  const [showLicenseModal, setShowLicenseModal] = useState(false);
   const [garagePreviewCarId, setGaragePreviewCarId] = useState<CarId>(
     () => loadProfile().selectedCarId
   );
@@ -204,6 +224,7 @@ export default function App() {
       right: k.right || t.right || g.right,
       drift: k.drift || t.drift || g.drift,
       nitro: k.nitro || t.nitro || g.nitro || doubleTapActive,
+      shunt: k.shunt || t.shunt,
       analogSteer: combinedAnalogSteer,
       analogThrottle: g.analogThrottle,
       analogBrake: g.analogBrake,
@@ -239,6 +260,8 @@ export default function App() {
       sceneRef.current?.startRace({
         mode: config.mode,
         trackId: config.trackId,
+        weatherTime: config.weatherTime,
+        dailyMutator: config.dailyMutator,
         tournamentId: config.tournamentId,
         raceIndex: config.raceIndex,
         profile: activeProfile,
@@ -271,11 +294,15 @@ export default function App() {
     );
   }
 
-  // Persist profile and sync audio/music settings
+  // Persist profile and sync audio/music/haptics settings
   useEffect(() => {
     saveProfile(profile);
     audioEngine.setVolume(profile.volume, profile.muted);
     audioEngine.setMusicEnabled(profile.musicEnabled);
+    if (profile.radioStation) {
+      audioEngine.setRadioStation(profile.radioStation);
+    }
+    hapticsEngine.setEnabled(profile.hapticsEnabled ?? true);
   }, [profile]);
 
   // Sync tiltSteering controller with toggle state
@@ -586,6 +613,7 @@ export default function App() {
         if (code === 'KeyD' || code === 'ArrowRight') k1.right = true;
         if (code === 'Space') k1.drift = true;
         if (code === 'ShiftLeft' || code === 'ShiftRight' || code === 'KeyN') k1.nitro = true;
+        if (code === 'KeyE' || code === 'KeyQ') k1.shunt = true;
       }
 
       pushMergedInput();
@@ -618,6 +646,7 @@ export default function App() {
         if (code === 'KeyD' || code === 'ArrowRight') k1.right = false;
         if (code === 'Space') k1.drift = false;
         if (code === 'ShiftLeft' || code === 'ShiftRight' || code === 'KeyN') k1.nitro = false;
+        if (code === 'KeyE' || code === 'KeyQ') k1.shunt = false;
       }
       pushMergedInput();
     };
@@ -685,7 +714,49 @@ export default function App() {
 
   const handleQuickRace = () => {
     audioEngine.playUiClick();
-    launchRace({ mode: 'quick', trackId: selectedQuickTrack });
+    launchRace({ mode: selectedQuickMode, trackId: selectedQuickTrack, weatherTime: selectedWeather });
+  };
+
+  const handleStartDailyChallenge = () => {
+    audioEngine.playUiClick();
+    const daily = generateDailyChallenge();
+    launchRace({
+      mode: 'quick',
+      trackId: daily.trackId,
+      weatherTime: daily.weatherTime,
+      dailyMutator: daily.mutator,
+    });
+  };
+
+  const handleCycleRadio = () => {
+    audioEngine.playUiClick();
+    const order: RadioStation[] = ['cyber_synth', 'afro_log', 'drift_phonk', 'off'];
+    const current = profile.radioStation ?? 'cyber_synth';
+    const next = order[(order.indexOf(current) + 1) % order.length];
+    setProfile((p) => ({ ...p, radioStation: next }));
+  };
+
+  const handleImportGhostCode = (code: string) => {
+    const decoded = decodeGhostChallengeCode(code);
+    if (!decoded) {
+      setGhostImportMsg('Invalid Ghost Code');
+      return;
+    }
+    saveTrackGhost(decoded.record);
+    setSelectedQuickTrack(decoded.record.trackId);
+    setGhostImportMsg(`Loaded ${decoded.record.lapTime.toFixed(2)}s Ghost!`);
+  };
+
+  const handleShareGhostCode = async (trackId: TrackId): Promise<string | null> => {
+    const ghost = loadTrackGhost(trackId);
+    if (!ghost) return null;
+    const code = encodeGhostChallengeCode(ghost, profile.customizations[ghost.carId]);
+    try {
+      await navigator.clipboard?.writeText(code);
+    } catch {
+      // Clipboard may be restricted
+    }
+    return code;
   };
 
   const handleStartP2PRaceAsHost = (trackId: TrackId) => {
@@ -839,12 +910,17 @@ export default function App() {
     setProfile((prev) => buyOrToggleCarToolInProfile(prev, carId, toolId));
   };
 
+  const handleBuyOrEquipCombatMod = (modId: CombatModId) => {
+    audioEngine.playUiClick();
+    setProfile((prev) => buyOrEquipCombatModInProfile(prev, modId));
+  };
+
   const handleUpdateCustomization = (carId: CarId, patch: Partial<CarCustomization>) => {
     setProfile((prev) => updateCarCustomizationInProfile(prev, carId, patch));
   };
 
   const handleTouchInput = (
-    key: 'throttle' | 'brake' | 'left' | 'right' | 'drift' | 'nitro',
+    key: 'throttle' | 'brake' | 'left' | 'right' | 'drift' | 'nitro' | 'shunt',
     pressed: boolean
   ) => {
     touchInputRef.current[key] = pressed;
@@ -877,11 +953,23 @@ export default function App() {
         <TitleScreen
           profile={profile}
           selectedQuickTrack={selectedQuickTrack}
+          selectedQuickMode={selectedQuickMode}
+          selectedWeather={selectedWeather}
+          ghostImportMsg={ghostImportMsg}
           gamepadStatus={gamepadStatus}
           onSelectQuickTrack={(tid) => {
             audioEngine.playUiClick();
             setSelectedQuickTrack(tid);
           }}
+          onSelectQuickMode={(m) => {
+            audioEngine.playUiClick();
+            setSelectedQuickMode(m);
+          }}
+          onSelectWeather={(w) => {
+            audioEngine.playUiClick();
+            setSelectedWeather(w);
+          }}
+          onImportGhostCode={handleImportGhostCode}
           onPlayerNameChange={(name) => setProfile((p) => ({ ...p, playerName: name }))}
           onQuickRace={handleQuickRace}
           onOpenCareer={() => {
@@ -902,6 +990,11 @@ export default function App() {
             setDriverPreviewId(profile.selectedDriverId);
             setScreen('drivers');
           }}
+          onOpenLicense={() => {
+            audioEngine.playUiClick();
+            setShowLicenseModal(true);
+          }}
+          onStartDailyChallenge={handleStartDailyChallenge}
           onToggleMute={handleToggleMute}
           onToggleMusic={handleToggleMusic}
           onToggleQuality={handleToggleQuality}
@@ -938,6 +1031,7 @@ export default function App() {
           onBuyOrEquipCar={handleBuyOrEquipCar}
           onUpgradeStat={handleUpgradeStat}
           onBuyOrToggleTool={handleBuyOrToggleTool}
+          onBuyOrEquipCombatMod={handleBuyOrEquipCombatMod}
           onUpdateCustomization={handleUpdateCustomization}
           onBack={() => {
             audioEngine.playUiClick();
@@ -996,6 +1090,8 @@ export default function App() {
           isCssRotated={isCssLandscapeStage}
           tiltEnabled={tiltEnabled}
           tiltSupported={tiltSteering.isSupported()}
+          radioStation={profile.radioStation ?? 'cyber_synth'}
+          onCycleRadio={handleCycleRadio}
           onToggleTilt={() => {
             audioEngine.playUiClick();
             setTiltEnabled((prev) => {
@@ -1046,6 +1142,7 @@ export default function App() {
       {screen === 'podium' && raceResult && !photoSettings.active && (
         <PodiumScreen
           summary={raceResult}
+          onShareGhostCode={() => handleShareGhostCode(raceResult.trackId)}
           onNextRace={handleNextTournamentRace}
           onRetryRace={() => {
             audioEngine.playUiClick();
@@ -1080,6 +1177,17 @@ export default function App() {
           onCaptureSnapshot={handleCaptureSnapshot}
           onExit={handleExitPhotoMode}
           snapshotSavedFlash={snapshotSavedFlash}
+        />
+      )}
+
+      {/* Driver License & Mastery Badges Modal */}
+      {showLicenseModal && (
+        <DriverLicenseModal
+          profile={profile}
+          onClose={() => {
+            audioEngine.playUiClick();
+            setShowLicenseModal(false);
+          }}
         />
       )}
     </div>

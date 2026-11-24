@@ -5,6 +5,7 @@ import type {
   CarSpec,
   CarToolId,
   CarToolSpec,
+  CombatModId,
   ComputedCarPerformance,
   DriverId,
   DriverPerkModifiers,
@@ -646,43 +647,215 @@ export const DRIVER_ORDER: DriverId[] = ['rookie', 'kenji', 'elena', 'marcus', '
 export const TRACK_CATALOG: Record<TrackId, TrackSpec> = {
   coastal: {
     id: 'coastal',
-    name: 'Sunny Coastal Highway',
-    subtitle: 'Pacific Shoreline',
+    name: 'Marina Coastal Causeway',
+    subtitle: 'Waterside Causeway',
     laps: 3,
     roadWidth: 23,
     accentHex: '#0ea5e9',
-    weatherLabel: 'Clear Midday',
-    description: 'Sweeping oceanfront hairpins, palm-lined straightaways, and coastal jump ramps.',
+    weatherLabel: 'Waterside Drop-Offs',
+    description: 'Open-water coastal highway & drawbridges with breakable harbor bollards for splashdown ring-outs.',
   },
   desert: {
     id: 'desert',
-    name: 'Sunset Desert Canyon',
-    subtitle: 'Red Rock Gorge',
+    name: 'Red Canyon Gorge',
+    subtitle: 'Desert Badlands',
     laps: 3,
     roadWidth: 22,
     accentHex: '#f97316',
-    weatherLabel: 'Golden Hour',
-    description: 'High-speed sandstone canyon sweepers, dust-lined mesas, and dramatic ridge jumps.',
+    weatherLabel: 'Golden Canyon Sun',
+    description: 'High-speed terracotta sandstone gorge with falling boulder hazards and ridge jump ramps.',
   },
   night: {
     id: 'night',
-    name: 'Rainy Neon Night City',
-    subtitle: 'Metro Elevated Loop',
+    name: 'Neo-Cyber Expressway',
+    subtitle: 'Night Neon City',
     laps: 3,
     roadWidth: 23,
     accentHex: '#d946ef',
-    weatherLabel: 'Night Rain',
-    description: 'Rain-drenched reflective tarmac, falling rain streaks, and glowing skyscraper canyons.',
+    weatherLabel: 'Rain & EMP Gates',
+    description: 'Rain-slicked mirror tarmac flanked by glowing skyscrapers, neon arches, and pulsing EMP drone gates.',
   },
   alpine: {
     id: 'alpine',
-    name: 'Alpine Mountain Pass',
-    subtitle: 'Glacier Ridge',
+    name: 'Alpine Glacier Pass',
+    subtitle: 'Snow & Ice',
     laps: 3,
     roadWidth: 22,
     accentHex: '#38bdf8',
-    weatherLabel: 'Crisp Alpine',
-    description: 'High-altitude pine switchbacks flanked by snow-capped peaks and rapid elevation drops.',
+    weatherLabel: 'Black-Ice Peaks',
+    description: 'High-altitude glacier switchbacks with glossy black-ice patches, pine forests, and crisp alpine fog.',
+  },
+};
+
+export function normalizeTrackId(raw: string | null | undefined): TrackId {
+  switch (raw) {
+    case 'coastal':
+    case 'marina_coast':
+      return 'coastal';
+    case 'desert':
+    case 'red_canyon':
+      return 'desert';
+    case 'night':
+    case 'cyber_metro':
+      return 'night';
+    case 'alpine':
+    case 'alpine_peak':
+      return 'alpine';
+    default:
+      return 'coastal';
+  }
+}
+
+export interface CombatModSpec {
+  id: CombatModId;
+  name: string;
+  shortName: string;
+  price: number;
+  description: string;
+}
+
+export const COMBAT_MODS: Record<CombatModId, CombatModSpec> = {
+  none: {
+    id: 'none',
+    name: 'Standard Street Chassis',
+    shortName: 'Stock',
+    price: 0,
+    description: 'Factory weight balance with no tactical combat modifier equipped.',
+  },
+  ram_chassis: {
+    id: 'ram_chassis',
+    name: 'Reinforced Ramming Chassis',
+    shortName: 'Ram Chassis',
+    price: 2200,
+    description: '+35% side-shunt impact damage and -20% collision self-damage.',
+  },
+  emp_shockwave: {
+    id: 'emp_shockwave',
+    name: 'EMP Shockwave Emitter',
+    shortName: 'EMP Emitter',
+    price: 3400,
+    description: 'Activating Shockwave releases a cyan EMP ring that stalls nearby rivals for 1.5s.',
+  },
+  fast_capacitor: {
+    id: 'fast_capacitor',
+    name: 'Fast-Charge Capacitor',
+    shortName: 'Fast Cap',
+    price: 2800,
+    description: 'Cuts breakdown Energy Core recovery time by 50% and boosts Energy Pad gain by +40%.',
+  },
+};
+
+export const COMBAT_MOD_ORDER: CombatModId[] = ['ram_chassis', 'emp_shockwave', 'fast_capacitor'];
+
+export interface CupBossSpec {
+  tournamentId: TournamentId;
+  name: string;
+  title: string;
+  carId: CarId;
+  bodyColor: string;
+  rimColor: string;
+  caliperColor: string;
+  underglowColor: string;
+  rewardCarId: CarId;
+  skillMult: number;
+}
+
+export const CUP_BOSSES: Record<TournamentId, CupBossSpec> = {
+  rookie_street: {
+    tournamentId: 'rookie_street',
+    name: 'Kuro "Drift King" Sato',
+    title: 'Street Syndicate Boss',
+    carId: 'coupe_drift',
+    bodyColor: '#f43f5e',
+    rimColor: '#fde047',
+    caliperColor: '#ef4444',
+    underglowColor: '#f43f5e',
+    rewardCarId: 'coupe_drift',
+    skillMult: 1.03,
+  },
+  coastal_drift: {
+    tournamentId: 'coastal_drift',
+    name: 'Marina "Tidebreaker" Cruz',
+    title: 'Causeway Enforcer',
+    carId: 'ingolstadt_rs6',
+    bodyColor: '#0284c7',
+    rimColor: '#e2e8f0',
+    caliperColor: '#22d3ee',
+    underglowColor: '#0ea5e9',
+    rewardCarId: 'ingolstadt_rs6',
+    skillMult: 1.05,
+  },
+  canyon_velocity: {
+    tournamentId: 'canyon_velocity',
+    name: 'Rex "Sandstorm" Vance',
+    title: 'Badlands Warlord',
+    carId: 'yokohama_gtr',
+    bodyColor: '#ea580c',
+    rimColor: '#18181b',
+    caliperColor: '#facc15',
+    underglowColor: '#f97316',
+    rewardCarId: 'yokohama_gtr',
+    skillMult: 1.07,
+  },
+  neon_metro: {
+    tournamentId: 'neon_metro',
+    name: 'Nyx "Cyber" Volkov',
+    title: 'Neon Grid Phantom',
+    carId: 'marinelli_f40',
+    bodyColor: '#c026d3',
+    rimColor: '#22d3ee',
+    caliperColor: '#e879f9',
+    underglowColor: '#d946ef',
+    rewardCarId: 'marinelli_f40',
+    skillMult: 1.08,
+  },
+  alpine_apex: {
+    tournamentId: 'alpine_apex',
+    name: 'Freya "Glacier" Lind',
+    title: 'Alpine Apex Queen',
+    carId: 'stuttgart_gt3rs',
+    bodyColor: '#38bdf8',
+    rimColor: '#f8fafc',
+    caliperColor: '#38bdf8',
+    underglowColor: '#22d3ee',
+    rewardCarId: 'stuttgart_gt3rs',
+    skillMult: 1.1,
+  },
+  hypercar_pro: {
+    tournamentId: 'hypercar_pro',
+    name: 'Enzo "Viper" Bellini',
+    title: 'Hypercar Pro Champion',
+    carId: 'scuderia_sf90',
+    bodyColor: '#dc2626',
+    rimColor: '#facc15',
+    caliperColor: '#f59e0b',
+    underglowColor: '#ef4444',
+    rewardCarId: 'scuderia_sf90',
+    skillMult: 1.12,
+  },
+  world_masters: {
+    tournamentId: 'world_masters',
+    name: 'Viktor "Titan" Kross',
+    title: 'World Masters Titan',
+    carId: 'veloce_larossa',
+    bodyColor: '#facc15',
+    rimColor: '#0f172a',
+    caliperColor: '#ef4444',
+    underglowColor: '#f59e0b',
+    rewardCarId: 'veloce_larossa',
+    skillMult: 1.14,
+  },
+  asphalt_legend: {
+    tournamentId: 'asphalt_legend',
+    name: 'Ares "Apex Zero" Moreau',
+    title: 'Ultimate Asphalt Legend',
+    carId: 'molsheim_bolide',
+    bodyColor: '#111827',
+    rimColor: '#22d3ee',
+    caliperColor: '#22d3ee',
+    underglowColor: '#06b6d4',
+    rewardCarId: 'molsheim_bolide',
+    skillMult: 1.16,
   },
 };
 

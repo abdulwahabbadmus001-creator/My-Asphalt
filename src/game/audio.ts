@@ -1,4 +1,4 @@
-import type { EngineType } from './types';
+import type { EngineType, RadioStation } from './types';
 
 interface EngineAcousticProfile {
   osc1Type: OscillatorType;
@@ -202,6 +202,7 @@ export class ProceduralAudioEngine {
   private volume = 0.72;
   private muted = false;
   private isEngineRunning = false;
+  private radioStation: RadioStation = 'cyber_synth';
 
   public unlock(): void {
     if (typeof window === 'undefined') return;
@@ -267,13 +268,33 @@ export class ProceduralAudioEngine {
   public setMusicEnabled(enabled: boolean): void {
     this.musicEnabled = enabled;
     if (this.musicGain && this.ctx) {
-      this.musicGain.gain.setTargetAtTime(enabled ? 0.22 : 0, this.ctx.currentTime, 0.05);
+      this.musicGain.gain.setTargetAtTime(enabled && this.radioStation !== 'off' ? 0.22 : 0, this.ctx.currentTime, 0.05);
     }
-    if (enabled && this.musicShouldPlay) {
+    if (enabled && this.radioStation !== 'off' && this.musicShouldPlay) {
       this.startMusicLoop();
-    } else if (!enabled) {
+    } else if (!enabled || this.radioStation === 'off') {
       this.stopMusicLoop();
     }
+  }
+
+  public setRadioStation(station: RadioStation): void {
+    this.radioStation = station;
+    if (this.musicGain && this.ctx) {
+      this.musicGain.gain.setTargetAtTime(
+        this.musicEnabled && station !== 'off' ? 0.22 : 0,
+        this.ctx.currentTime,
+        0.04
+      );
+    }
+    if (station === 'off') {
+      this.stopMusicLoop();
+    } else if (this.musicEnabled && this.musicShouldPlay) {
+      this.startMusicLoop();
+    }
+  }
+
+  public getRadioStation(): RadioStation {
+    return this.radioStation;
   }
 
   public startMusic(): void {
@@ -321,13 +342,25 @@ export class ProceduralAudioEngine {
         this.musicStep++;
         const stepSec = params.stepMs / 1000;
 
-        // Layer 1 (Always Active): Driving Synthwave Sawtooth Bassline + Kick
+        // Layer 1 (Always Active): Station-flavored Bassline + Kick
         const bassFreq = bassPattern[step];
         const bOsc = this.ctx.createOscillator();
         const bFilter = this.ctx.createBiquadFilter();
         const bGain = this.ctx.createGain();
-        bOsc.type = 'sawtooth';
-        bOsc.frequency.setValueAtTime(bassFreq, now);
+        bOsc.type =
+          this.radioStation === 'afro_log'
+            ? 'triangle'
+            : this.radioStation === 'drift_phonk'
+              ? 'sine'
+              : 'sawtooth';
+        const freqVal = this.radioStation === 'afro_log' ? bassFreq * 1.15 : bassFreq;
+        bOsc.frequency.setValueAtTime(
+          this.radioStation === 'afro_log' ? freqVal * 1.45 : freqVal,
+          now
+        );
+        if (this.radioStation === 'afro_log') {
+          bOsc.frequency.exponentialRampToValueAtTime(freqVal, now + 0.065);
+        }
         bFilter.type = 'lowpass';
         bFilter.frequency.setValueAtTime(
           step % 4 === 0 ? params.bassFilterCutoff + 180 : params.bassFilterCutoff,
@@ -928,6 +961,107 @@ export class ProceduralAudioEngine {
     gain.connect(this.masterGain);
     osc.start(now);
     osc.stop(now + 0.07);
+  }
+
+  public playWaterSplash(): void {
+    if (!this.ctx || !this.masterGain || !this.noiseBuffer) return;
+    const now = this.ctx.currentTime;
+    const src = this.ctx.createBufferSource();
+    src.buffer = this.noiseBuffer;
+    const filter = this.ctx.createBiquadFilter();
+    filter.type = 'bandpass';
+    filter.frequency.setValueAtTime(950, now);
+    filter.frequency.exponentialRampToValueAtTime(220, now + 0.55);
+    filter.Q.value = 1.4;
+    const gain = this.ctx.createGain();
+    gain.gain.setValueAtTime(0.38, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.62);
+    src.connect(filter);
+    filter.connect(gain);
+    gain.connect(this.masterGain);
+    src.start(now);
+    src.stop(now + 0.65);
+  }
+
+  public playShuntSlam(): void {
+    if (!this.ctx || !this.masterGain) return;
+    const now = this.ctx.currentTime;
+    const osc = this.ctx.createOscillator();
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(160, now);
+    osc.frequency.exponentialRampToValueAtTime(48, now + 0.14);
+    const gain = this.ctx.createGain();
+    gain.gain.setValueAtTime(0.28, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.16);
+    osc.connect(gain);
+    gain.connect(this.masterGain);
+    osc.start(now);
+    osc.stop(now + 0.17);
+  }
+
+  public playOverdriveSurge(): void {
+    if (!this.ctx || !this.masterGain) return;
+    const now = this.ctx.currentTime;
+    const osc = this.ctx.createOscillator();
+    osc.type = 'sawtooth';
+    osc.frequency.setValueAtTime(220, now);
+    osc.frequency.exponentialRampToValueAtTime(1040, now + 0.32);
+    const gain = this.ctx.createGain();
+    gain.gain.setValueAtTime(0.2, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.35);
+    osc.connect(gain);
+    gain.connect(this.masterGain);
+    osc.start(now);
+    osc.stop(now + 0.36);
+  }
+
+  public playEmpPulse(): void {
+    if (!this.ctx || !this.masterGain) return;
+    const now = this.ctx.currentTime;
+    const osc = this.ctx.createOscillator();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(1320, now);
+    osc.frequency.exponentialRampToValueAtTime(140, now + 0.34);
+    const gain = this.ctx.createGain();
+    gain.gain.setValueAtTime(0.24, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.36);
+    osc.connect(gain);
+    gain.connect(this.masterGain);
+    osc.start(now);
+    osc.stop(now + 0.38);
+  }
+
+  public playEliminationBoom(): void {
+    if (!this.ctx || !this.masterGain) return;
+    const now = this.ctx.currentTime;
+    const osc = this.ctx.createOscillator();
+    osc.type = 'sawtooth';
+    osc.frequency.setValueAtTime(110, now);
+    osc.frequency.exponentialRampToValueAtTime(28, now + 0.45);
+    const gain = this.ctx.createGain();
+    gain.gain.setValueAtTime(0.35, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.48);
+    osc.connect(gain);
+    gain.connect(this.masterGain);
+    osc.start(now);
+    osc.stop(now + 0.5);
+  }
+
+  public playPoliceSirenPulse(): void {
+    if (!this.ctx || !this.masterGain) return;
+    const now = this.ctx.currentTime;
+    const osc = this.ctx.createOscillator();
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(660, now);
+    osc.frequency.linearRampToValueAtTime(920, now + 0.22);
+    osc.frequency.linearRampToValueAtTime(640, now + 0.44);
+    const gain = this.ctx.createGain();
+    gain.gain.setValueAtTime(0.11, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.46);
+    osc.connect(gain);
+    gain.connect(this.masterGain);
+    osc.start(now);
+    osc.stop(now + 0.48);
   }
 }
 

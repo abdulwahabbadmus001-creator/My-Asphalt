@@ -1,6 +1,7 @@
 import {
   AI_RIVALS,
   computeCarPerformance,
+  CUP_BOSSES,
   DRIVER_CATALOG,
   FASTEST_LAP_BONUS_CASH,
   getCashForPlace,
@@ -14,6 +15,7 @@ import { getTrackData, sampleTrackAtDistance, type TrackData, wrapTrackDistance 
 import type {
   ActiveTournamentState,
   CarId,
+  DailyMutatorId,
   HudTelemetry,
   InputState,
   P2PNetState,
@@ -32,10 +34,15 @@ import type {
   TrackId,
   TrackPickup,
   UpgradeLevels,
+  WeatherTimeOfDay,
 } from './types';
 
 export interface RaceWorld {
   mode: RaceMode;
+  weatherTime: WeatherTimeOfDay;
+  dailyMutator?: DailyMutatorId;
+  heatLevel: number;
+  heliLockTimer: number | null;
   tournamentId?: TournamentId;
   raceIndex?: number;
   track: TrackData;
@@ -46,6 +53,13 @@ export interface RaceWorld {
   countdownTimer: number;
   slowmoTimer: number;
   raceTime: number;
+  eliminationTimer: number | null;
+  rampageTimer: number | null;
+  isBossFight: boolean;
+  bossName: string | null;
+  bossRewardCarId: CarId | null;
+  combatBanner: string | null;
+  combatBannerTimer: number;
   racers: RacerState[];
   pickups: TrackPickup[];
   smashables: SmashableBarrier[];
@@ -56,6 +70,8 @@ export interface RaceWorld {
 export interface CreateRaceOptions {
   mode: RaceMode;
   trackId: TrackId;
+  weatherTime?: WeatherTimeOfDay;
+  dailyMutator?: DailyMutatorId;
   profile: PlayerProfile;
   tournamentId?: TournamentId;
   raceIndex?: number;
@@ -252,36 +268,65 @@ export function createRaceWorld(opts: CreateRaceOptions): RaceWorld {
   const aiUpgrades = makeAiUpgrades(aiDifficulty);
   const aiHasAero = aiDifficulty >= 1.06;
 
-  // In splitscreen or p2p mode, replace slot 4 with Player 2 or Remote Peer so both humans start side-by-side!
-  const aiCount = opts.mode === 'splitscreen' || opts.mode === 'p2p' ? 4 : 5;
+  const isBossFight =
+    opts.mode === 'tournament' &&
+    Boolean(opts.tournamentId) &&
+    opts.raceIndex === 2;
+  const bossSpec = isBossFight && opts.tournamentId ? CUP_BOSSES[opts.tournamentId] : null;
 
-  AI_RIVALS.slice(0, aiCount).forEach((rival, idx) => {
-    const slot = gridSlots[idx];
-    const aiTools = aiHasAero ? (['aero', 'turbo'] as const) : [];
-    const basePerf = computeCarPerformance(rival.carId, aiUpgrades, [...aiTools]);
-    const skillFactor = clamp(rival.baseSkill * aiDifficulty, 0.84, 1.32);
+  const baseCombatFields = {
+    airSpinAngle: 0,
+    airSpinRate: 0,
+    airRollAngle: 0,
+    airRollRate: 0,
+    airRotationsCompleted: 0,
+    integrity: 100,
+    maxIntegrity: 100,
+    isBrokenDown: false,
+    breakdownTimer: 0,
+    shuntCooldown: 0,
+    shuntTimer: 0,
+    shuntDir: 0,
+    lastAttackerId: null as string | null,
+    isDrowning: false,
+    waterRecoveryTimer: 0,
+    respawnImmunityTimer: 0,
+    eliminated: false,
+    empStallTimer: 0,
+  };
 
-    const startS = wrapTrackDistance(track.totalLength - slot.sBack, track.totalLength);
-    const racer: RacerState = {
-      id: rival.id,
-      name: rival.name,
+  if (bossSpec) {
+    const bossSlot = gridSlots[0];
+    const bossPerf = computeCarPerformance(
+      bossSpec.carId,
+      makeAiUpgrades(aiDifficulty + 0.08),
+      ['aero', 'turbo', 'nitrous']
+    );
+    const bossStartS = wrapTrackDistance(track.totalLength - bossSlot.sBack, track.totalLength);
+    const bossRacer: RacerState = {
+      ...baseCombatFields,
+      id: `boss-${bossSpec.tournamentId}`,
+      name: bossSpec.name,
       isPlayer: false,
-      carId: rival.carId,
-      bodyColor: rival.bodyColor,
-      finish: idx % 2 === 0 ? 'metallic' : 'matte',
-      rimColor: rival.rimColor,
-      caliperColor: rival.caliperColor,
-      underglowColor: rival.underglowColor,
-      hasActiveAero: aiHasAero,
-      styleLabel: rival.styleLabel,
-      aiStyle: rival.style,
-      aiSkill: skillFactor,
-      aiAggression,
-      perf: basePerf,
-      driverPerks: DRIVER_CATALOG.rookie.perks,
-      s: startS,
-      totalDistance: -slot.sBack,
-      d: slot.d,
+      isBoss: true,
+      carId: bossSpec.carId,
+      bodyColor: bossSpec.bodyColor,
+      finish: 'chameleon',
+      rimColor: bossSpec.rimColor,
+      caliperColor: bossSpec.caliperColor,
+      underglowColor: bossSpec.underglowColor,
+      hasActiveAero: true,
+      styleLabel: bossSpec.title,
+      aiStyle: 'blocker',
+      aiSkill: clamp(bossSpec.skillMult * aiDifficulty, 0.96, 1.35),
+      aiAggression: Math.max(1.2, aiAggression),
+      perf: bossPerf,
+      driverPerks: DRIVER_CATALOG.jax.perks,
+      integrity: 115,
+      maxIntegrity: 115,
+      s: bossStartS,
+      totalDistance: -bossSlot.sBack,
+      d: bossSlot.d,
       headingOffset: 0,
       speed: 0,
       lateralSpeed: 0,
@@ -301,7 +346,7 @@ export function createRaceWorld(opts: CreateRaceOptions): RaceWorld {
       currentDriftDistance: 0,
       isNitroActive: false,
       isShockwave: false,
-      nitro: 42,
+      nitro: 55,
       boostTimer: 0,
       shieldTimer: 0,
       spinoutTimer: 0,
@@ -316,15 +361,92 @@ export function createRaceWorld(opts: CreateRaceOptions): RaceWorld {
       bestLapTime: null,
       finished: false,
       finishTime: null,
-      place: idx + 1,
-      aiTargetOffset: slot.d,
-      aiLaneTimer: 1.5 + idx * 0.4,
+      place: 1,
+      aiTargetOffset: bossSlot.d,
+      aiLaneTimer: 1.2,
       worldPos: { x: 0, y: 0, z: 0 },
       worldYaw: 0,
     };
-    updateRacerWorldTransform(racer, track);
-    racers.push(racer);
-  });
+    updateRacerWorldTransform(bossRacer, track);
+    racers.push(bossRacer);
+  } else {
+    // In splitscreen or p2p mode, replace slot 4 with Player 2 or Remote Peer so both humans start side-by-side!
+    const aiCount = opts.mode === 'splitscreen' || opts.mode === 'p2p' ? 4 : 5;
+
+    AI_RIVALS.slice(0, aiCount).forEach((rival, idx) => {
+      const slot = gridSlots[idx];
+      const aiTools = aiHasAero ? (['aero', 'turbo'] as const) : [];
+      const basePerf = computeCarPerformance(rival.carId, aiUpgrades, [...aiTools]);
+      const skillFactor = clamp(rival.baseSkill * aiDifficulty, 0.84, 1.32);
+
+      const startS = wrapTrackDistance(track.totalLength - slot.sBack, track.totalLength);
+      const racer: RacerState = {
+        ...baseCombatFields,
+        id: rival.id,
+        name: opts.mode === 'pursuit' ? `Interceptor #${idx + 1}` : rival.name,
+        isPlayer: false,
+        isPolice: opts.mode === 'pursuit',
+        spikeStripTimer: 0,
+        carId: opts.mode === 'pursuit' ? 'ingolstadt_rs6' : rival.carId,
+        bodyColor: opts.mode === 'pursuit' ? '#0f172a' : rival.bodyColor,
+        finish: idx % 2 === 0 ? 'metallic' : 'matte',
+        rimColor: rival.rimColor,
+        caliperColor: rival.caliperColor,
+        underglowColor: opts.mode === 'pursuit' ? '#3b82f6' : rival.underglowColor,
+        hasActiveAero: aiHasAero,
+        styleLabel: rival.styleLabel,
+        aiStyle: rival.style,
+        aiSkill: skillFactor,
+        aiAggression,
+        perf: basePerf,
+        driverPerks: DRIVER_CATALOG.rookie.perks,
+        s: startS,
+        totalDistance: -slot.sBack,
+        d: slot.d,
+        headingOffset: 0,
+        speed: 0,
+        lateralSpeed: 0,
+        yOffset: 0,
+        vy: 0,
+        isAirborne: false,
+        currentAirTime: 0,
+        rampCooldown: 0,
+        steerAngle: 0,
+        bodyRoll: 0,
+        bodyPitch: 0,
+        suspensionHeave: 0,
+        brakeHeat: 0,
+        driftAngle: 0,
+        isDrifting: false,
+        driftDirection: 0,
+        currentDriftDistance: 0,
+        isNitroActive: false,
+        isShockwave: false,
+        nitro: 42,
+        boostTimer: 0,
+        shieldTimer: 0,
+        spinoutTimer: 0,
+        spinoutAngle: 0,
+        wheelSpin: 0,
+        lapWallHits: 0,
+        nearMissCooldowns: {},
+        lap: 1,
+        maxCheckpoint: 0,
+        lapStartTime: 0,
+        currentLapTime: 0,
+        bestLapTime: null,
+        finished: false,
+        finishTime: null,
+        place: idx + 1,
+        aiTargetOffset: slot.d,
+        aiLaneTimer: 1.5 + idx * 0.4,
+        worldPos: { x: 0, y: 0, z: 0 },
+        worldYaw: 0,
+      };
+      updateRacerWorldTransform(racer, track);
+      racers.push(racer);
+    });
+  }
 
   // Add Player 2 (Split-Screen) or Remote Peer (Offline WebRTC P2P)
   if (opts.mode === 'splitscreen') {
@@ -347,6 +469,7 @@ export function createRaceWorld(opts: CreateRaceOptions): RaceWorld {
       aiAggression: 1,
       perf: playerPerf,
       driverPerks: playerDriver.perks,
+      ...baseCombatFields,
       s: p2StartS,
       totalDistance: -p2Slot.sBack,
       d: p2Slot.d,
@@ -413,6 +536,7 @@ export function createRaceWorld(opts: CreateRaceOptions): RaceWorld {
       aiAggression: 1,
       perf: computeCarPerformance(peerCarId, aiUpgrades, ['aero']),
       driverPerks: DRIVER_CATALOG.rookie.perks,
+      ...baseCombatFields,
       s: peerStartS,
       totalDistance: -peerSlot.sBack,
       d: peerSlot.d,
@@ -460,13 +584,18 @@ export function createRaceWorld(opts: CreateRaceOptions): RaceWorld {
     racers.push(peerRacer);
   }
 
-  // Player 1 starts P6
-  const playerSlot = gridSlots[5];
+  // Player 1 starts P6 (or P2 in 1v1 Boss Showdown)
+  const playerSlot = bossSpec ? gridSlots[1] : gridSlots[5];
   const playerStartS = wrapTrackDistance(track.totalLength - playerSlot.sBack, track.totalLength);
   const playerRacer: RacerState = {
+    ...baseCombatFields,
     id: 'player',
     name: opts.profile.playerName.trim() || playerDriver.name,
     isPlayer: true,
+    combatMod: opts.profile.equippedCombatMod ?? 'none',
+    rideHeight: playerCustom.rideHeight ?? 'stock',
+    rimStyle: playerCustom.rimStyle ?? 'multi_spoke',
+    spoilerStyle: playerCustom.spoilerStyle ?? 'gt_wing',
     carId: playerCarId,
     bodyColor: playerCustom.bodyColor,
     finish: playerCustom.finish,
@@ -516,7 +645,7 @@ export function createRaceWorld(opts: CreateRaceOptions): RaceWorld {
     bestLapTime: null,
     finished: false,
     finishTime: null,
-    place: 6,
+    place: bossSpec ? 2 : 6,
     aiTargetOffset: 0,
     aiLaneTimer: 0,
     worldPos: { x: 0, y: 0, z: 0 },
@@ -537,18 +666,32 @@ export function createRaceWorld(opts: CreateRaceOptions): RaceWorld {
     respawnTimer: 0,
   }));
 
+  const defaultWeather: WeatherTimeOfDay =
+    opts.weatherTime ?? (opts.trackId === 'night' ? 'storm' : opts.trackId === 'desert' ? 'sunset' : 'noon');
+
   return {
     mode: opts.mode,
+    weatherTime: defaultWeather,
+    dailyMutator: opts.dailyMutator,
+    heatLevel: opts.mode === 'pursuit' ? 1 : 0,
+    heliLockTimer: null,
     tournamentId: opts.tournamentId,
     raceIndex: opts.raceIndex,
     track,
-    totalLaps: trackSpec.laps,
+    totalLaps: opts.mode === 'elimination' ? 99 : opts.mode === 'rampage' ? 99 : trackSpec.laps,
     aiDifficulty,
     aiAggression,
     phase: 'countdown',
     countdownTimer: 2.7,
     slowmoTimer: 0,
     raceTime: 0,
+    eliminationTimer: opts.mode === 'elimination' ? 20.0 : null,
+    rampageTimer: opts.mode === 'rampage' ? 90.0 : null,
+    isBossFight,
+    bossName: bossSpec ? bossSpec.name : null,
+    bossRewardCarId: bossSpec ? bossSpec.rewardCarId : null,
+    combatBanner: null,
+    combatBannerTimer: 0,
     racers,
     pickups,
     smashables,
@@ -695,6 +838,42 @@ function updateRacerPhysics(
   racer.boostTimer = Math.max(0, racer.boostTimer - dt);
   racer.shieldTimer = Math.max(0, racer.shieldTimer - dt);
   racer.rampCooldown = Math.max(0, racer.rampCooldown - dt);
+  racer.shuntCooldown = Math.max(0, racer.shuntCooldown - dt);
+  racer.shuntTimer = Math.max(0, racer.shuntTimer - dt);
+  racer.respawnImmunityTimer = Math.max(0, racer.respawnImmunityTimer - dt);
+  racer.empStallTimer = Math.max(0, racer.empStallTimer - dt);
+  racer.spikeStripTimer = Math.max(0, (racer.spikeStripTimer ?? 0) - dt);
+
+  if (racer.eliminated) {
+    racer.speed = Math.max(0, racer.speed - 25 * dt);
+    updateRacerWorldTransform(racer, track);
+    return;
+  }
+
+  // Waterside Splashdown Drowning & Air-Drop Recovery
+  if (racer.isDrowning) {
+    racer.waterRecoveryTimer -= dt;
+    racer.vy -= GRAVITY * 0.85 * dt;
+    racer.yOffset += racer.vy * dt;
+    racer.speed = Math.max(0, racer.speed * (1 - dt * 2.5));
+    racer.spinoutAngle += dt * 5.0;
+    if (racer.waterRecoveryTimer <= 0) {
+      racer.isDrowning = false;
+      racer.d = 0;
+      racer.yOffset = 2.4;
+      racer.vy = 0;
+      racer.isAirborne = true;
+      racer.headingOffset = 0;
+      racer.spinoutAngle = 0;
+      racer.spinoutTimer = 0;
+      racer.integrity = Math.round(racer.maxIntegrity * 0.65);
+      racer.isBrokenDown = false;
+      racer.respawnImmunityTimer = 1.5;
+      racer.speed = Math.max(28, racer.perf.maxSpeedMps * 0.55);
+    }
+    updateRacerWorldTransform(racer, track);
+    return;
+  }
 
   if (racer.isPlayer) {
     for (const key of Object.keys(racer.nearMissCooldowns)) {
@@ -759,6 +938,18 @@ function updateRacerPhysics(
     if (racer.isShockwave && !wasShockwave) {
       events.playerShockwaveStarted = true;
       pushPopup(world, events.stuntPopups, 'SHOCKWAVE!', 0, 'fuchsia');
+      // EMP Shockwave Emitter Combat Mod: stalls nearby rivals within 22m
+      if (racer.combatMod === 'emp_shockwave') {
+        events.empBlastTriggered = true;
+        for (const other of world.racers) {
+          if (other.id === racer.id || other.eliminated || other.isDrowning) continue;
+          const ds = Math.abs(signedTrackDelta(racer.s, other.s, track.totalLength));
+          if (ds < 22) {
+            other.empStallTimer = 1.5;
+            other.speed *= 0.68;
+          }
+        }
+      }
     } else if (racer.isNitroActive && !wasNitro) {
       events.playerNitroStarted = true;
     }
@@ -826,10 +1017,58 @@ function updateRacerPhysics(
     racer.driftAngle += (0 - racer.driftAngle) * Math.min(1, dt * 7.5);
   }
 
+  // Tactical Side-Shunt (Lateral Slam)
+  const shuntCooldownDuration = world.dailyMutator === 'infinite_shunt' ? 0.2 : 2.4;
+  const shuntImpulse = world.dailyMutator === 'infinite_shunt' ? 36 : 24;
+  if (
+    input.shunt &&
+    racer.shuntCooldown <= 0 &&
+    !racer.isBrokenDown &&
+    !racer.isAirborne &&
+    !racer.finished
+  ) {
+    racer.shuntCooldown = shuntCooldownDuration;
+    racer.shuntTimer = 0.26;
+    racer.shuntDir = steerInput !== 0 ? Math.sign(steerInput) : racer.d >= 0 ? -1 : 1;
+    if (racer.isPlayer) {
+      events.playerShuntTriggered = true;
+    }
+  }
+  if (racer.shuntTimer > 0) {
+    racer.d += racer.shuntDir * shuntImpulse * dt;
+  }
+
+  // Breakdown State & Emergency Energy Core Regeneration
+  if (racer.isBrokenDown) {
+    const recoveryDuration = racer.combatMod === 'fast_capacitor' ? 1.5 : 3.0;
+    const regenPerSec = 100 / recoveryDuration;
+    racer.nitro = clamp(racer.nitro + regenPerSec * dt, 0, 100);
+    racer.isNitroActive = false;
+    racer.isShockwave = false;
+    if (racer.nitro >= 100) {
+      racer.isBrokenDown = false;
+      racer.integrity = Math.round(racer.maxIntegrity * 0.65);
+      racer.boostTimer = 1.25;
+      racer.speed = Math.max(racer.speed, racer.perf.maxSpeedMps * 0.65);
+      if (racer.isPlayer) {
+        events.playerOverdriveRestart = true;
+        pushPopup(world, events.stuntPopups, 'OVERDRIVE RESTART!', 0, 'cyan');
+      }
+    }
+  }
+
   let targetMaxSpeed =
     racer.perf.maxSpeedMps *
     (racer.isPlayer || racer.isPlayer2 ? 1.0 : racer.aiSkill * rubberBandSpeed);
   let accelMult = racer.isPlayer || racer.isPlayer2 ? 1.0 : rubberBandAccel;
+
+  if (racer.isBrokenDown) {
+    targetMaxSpeed *= 0.25;
+    accelMult *= 0.4;
+  } else if (racer.empStallTimer > 0) {
+    targetMaxSpeed *= 0.58;
+    accelMult *= 0.55;
+  }
 
   if (racer.isShockwave) {
     targetMaxSpeed *= racer.perf.shockwaveBoostMult;
@@ -840,7 +1079,8 @@ function updateRacerPhysics(
     accelMult *= 1.48;
     racer.nitro = Math.max(0, racer.nitro - racer.perf.nitroDrainRate * dt);
   } else {
-    const passiveRegen = racer.speed > 26 ? (racer.perf.hasDualNitrous ? 3.8 : 2.3) : 0.8;
+    const mutatorRegen = world.dailyMutator === 'hyper_charge' ? 2.0 : 1.0;
+    const passiveRegen = (racer.speed > 26 ? (racer.perf.hasDualNitrous ? 3.8 : 2.3) : 0.8) * mutatorRegen;
     racer.nitro = clamp(racer.nitro + passiveRegen * dt, 0, racer.perf.nitroCapacity);
   }
 
@@ -901,7 +1141,9 @@ function updateRacerPhysics(
   const curveKick = sample.curvature * racer.speed * dt;
   racer.headingOffset = clamp(racer.headingOffset + steerDelta + curveKick, -0.78, 0.78);
 
-  const centeringStrength = racer.isDrifting ? 2.1 : racer.perf.grip * 0.56;
+  const centeringStrength =
+    (racer.isDrifting ? 2.1 : racer.perf.grip * 0.56) *
+    (track.id === 'alpine' && Math.sin(racer.s * 0.045) > 0.65 ? 0.45 : 1.0);
   if (Math.abs(steerInput) < 0.05) {
     racer.headingOffset += (0 - racer.headingOffset) * Math.min(1, dt * centeringStrength);
   }
@@ -943,18 +1185,77 @@ function updateRacerPhysics(
   racer.d += lateralVel * dt;
   racer.wheelSpin += (racer.speed / 0.37) * dt;
 
-  // Airborne & Jump Ramp Physics
+  const gravScale = world.dailyMutator === 'low_gravity' ? 0.45 : 1.0;
+  // Airborne & Jump Ramp Physics (including Barrel Rolls, Flat Spins & Vertical Takedowns)
   if (racer.isAirborne) {
-    racer.vy -= GRAVITY * dt;
+    const prevY = racer.yOffset;
+    racer.vy -= GRAVITY * gravScale * dt;
     racer.yOffset += racer.vy * dt;
     racer.currentAirTime += dt;
+
+    if (racer.airRollRate !== 0) {
+      racer.airRollAngle += racer.airRollRate * dt;
+      const totalRolls = Math.floor(Math.abs(racer.airRollAngle) / (Math.PI * 2));
+      if (totalRolls > racer.airRotationsCompleted) {
+        racer.airRotationsCompleted = totalRolls;
+        racer.nitro = clamp(racer.nitro + 40, 0, racer.perf.nitroCapacity);
+        if (racer.isPlayer) {
+          pushPopup(world, events.stuntPopups, 'BARREL ROLL! +40% NITRO', 150, 'fuchsia');
+        }
+      }
+    }
+    if (racer.airSpinRate !== 0) {
+      racer.airSpinAngle += racer.airSpinRate * dt;
+      const totalSpins = Math.floor(Math.abs(racer.airSpinAngle) / (Math.PI * 2));
+      if (totalSpins > racer.airRotationsCompleted) {
+        racer.airRotationsCompleted = totalSpins;
+        racer.nitro = clamp(racer.nitro + 40, 0, racer.perf.nitroCapacity);
+        if (racer.isPlayer) {
+          pushPopup(world, events.stuntPopups, '360° FLAT SPIN! +40% NITRO', 150, 'cyan');
+        }
+      }
+    }
 
     if (racer.yOffset <= 0) {
       racer.yOffset = 0;
       racer.vy = 0;
       racer.isAirborne = false;
+      racer.airSpinAngle = 0;
+      racer.airSpinRate = 0;
+      racer.airRollAngle = 0;
+      racer.airRollRate = 0;
+      racer.airRotationsCompleted = 0;
       racer.suspensionHeave = -0.095; // landing suspension compression punch!
-      racer.boostTimer = Math.max(racer.boostTimer, 0.65);
+      racer.boostTimer = Math.max(racer.boostTimer, 0.75);
+
+      // Vertical Takedown check when landing on a rival car
+      if (prevY > 0.35 && racer.isPlayer) {
+        for (const other of world.racers) {
+          if (other.id === racer.id || other.eliminated || other.isDrowning) continue;
+          const ds = Math.abs(signedTrackDelta(racer.s, other.s, track.totalLength));
+          const dd = Math.abs(racer.d - other.d);
+          if (ds < 5.0 && dd < 3.0) {
+            other.integrity = 0;
+            other.isBrokenDown = true;
+            other.spinoutTimer = 1.4;
+            other.speed *= 0.35;
+            other.lastAttackerId = racer.id;
+            racer.nitro = clamp(racer.nitro + 50, 0, racer.perf.nitroCapacity);
+            world.stuntStats.takedowns += 1;
+            world.stuntStats.takedownCash += 300;
+            recomputeStuntSummary(world.stuntStats);
+            if (world.mode === 'rampage' && world.rampageTimer !== null) {
+              world.rampageTimer += 8.0;
+            }
+            events.playerTakedown = true;
+            events.playerVerticalTakedown = true;
+            events.hitStopSec = 0.04;
+            world.combatBanner = 'VERTICAL TAKEDOWN! +50% NITRO';
+            world.combatBannerTimer = 2.0;
+            pushPopup(world, events.stuntPopups, 'VERTICAL TAKEDOWN!', 300, 'rose');
+          }
+        }
+      }
 
       if (racer.isPlayer) {
         events.playerLanded = true;
@@ -984,7 +1285,10 @@ function updateRacerPhysics(
         if (progress >= 0.58 || crossedCrest) {
           racer.isAirborne = true;
           racer.currentAirTime = 0;
-          racer.vy = (11.0 + racer.speed * 0.145) * racer.driverPerks.rampLaunchMult;
+          racer.airRotationsCompleted = 0;
+          racer.airRollRate = ramp.isBarrelRoll ? Math.PI * 2.15 : 0;
+          racer.airSpinRate = !ramp.isBarrelRoll && racer.isDrifting ? Math.PI * 2.15 : 0;
+          racer.vy = (11.5 + racer.speed * 0.145) * racer.driverPerks.rampLaunchMult;
           racer.speed = Math.min(racer.perf.maxSpeedMps * 1.45, racer.speed * 1.07);
           racer.nitro = clamp(racer.nitro + 12, 0, racer.perf.nitroCapacity);
           racer.rampCooldown = 1.6;
@@ -997,8 +1301,44 @@ function updateRacerPhysics(
     }
   }
 
-  // Smooth rail-glide wall collision
-  if (Math.abs(racer.d) > wallLimit) {
+  // Waterside Ring-Out (marina_coast / coastal) & Smooth Rail-Glide Wall Collision
+  const isWatersideTrack = track.id === 'coastal';
+  const pushedPastWaterEdge =
+    isWatersideTrack &&
+    !racer.isAirborne &&
+    Math.abs(racer.d) > halfRoad + 1.1 &&
+    (racer.shuntTimer > 0 || racer.spinoutTimer > 0 || Math.abs(racer.headingOffset) > 0.28);
+
+  if (pushedPastWaterEdge) {
+    racer.isDrowning = true;
+    racer.waterRecoveryTimer = 2.5;
+    racer.vy = -3.5;
+    racer.integrity = 0;
+    racer.isBrokenDown = true;
+    updateRacerWorldTransform(racer, track);
+    events.collisions.push({
+      type: 'splashdown',
+      intensity: 1.0,
+      pos: { ...racer.worldPos },
+      involvesPlayer: racer.isPlayer || racer.lastAttackerId === 'player',
+    });
+    if (racer.lastAttackerId === 'player' && !racer.isPlayer) {
+      player.nitro = clamp(player.nitro + 50, 0, player.perf.nitroCapacity);
+      world.stuntStats.takedowns += 1;
+      world.stuntStats.takedownCash += 300;
+      recomputeStuntSummary(world.stuntStats);
+      if (world.mode === 'rampage' && world.rampageTimer !== null) {
+        world.rampageTimer += 8.0;
+        pushPopup(world, events.stuntPopups, '+8s SPLASHDOWN!', 300, 'cyan');
+      } else {
+        pushPopup(world, events.stuntPopups, 'SPLASHDOWN RING-OUT!', 300, 'cyan');
+      }
+      world.combatBanner = 'SPLASHDOWN RING-OUT! +50% ENERGY';
+      world.combatBannerTimer = 2.2;
+      events.playerSplashdown = true;
+      events.playerTakedown = true;
+    }
+  } else if (Math.abs(racer.d) > wallLimit && !racer.isDrowning) {
     const sign = Math.sign(racer.d);
     const impactAngle = Math.abs(racer.headingOffset);
     racer.d = sign * wallLimit;
@@ -1055,16 +1395,24 @@ function updateRacerPhysics(
           pushPopup(world, events.stuntPopups, 'CASH COIN!', 150, 'amber');
         }
       } else if (pickup.kind === 'nitro_blue') {
-        racer.nitro = clamp(racer.nitro + 32, 0, racer.perf.nitroCapacity);
+        const capBonus = racer.combatMod === 'fast_capacitor' ? 1.4 : 1.0;
+        racer.nitro = clamp(racer.nitro + 32 * capBonus, 0, racer.perf.nitroCapacity);
+        if (racer.isBrokenDown) {
+          racer.integrity = Math.min(racer.maxIntegrity, racer.integrity + 25);
+        }
         if (racer.isPlayer) {
-          pushPopup(world, events.stuntPopups, '+32% NITRO', 0, 'cyan');
+          pushPopup(world, events.stuntPopups, '+32% ENERGY', 0, 'cyan');
         }
       } else if (pickup.kind === 'nitro_gold') {
-        racer.nitro = clamp(racer.nitro + 62, 0, racer.perf.nitroCapacity);
+        const capBonus = racer.combatMod === 'fast_capacitor' ? 1.4 : 1.0;
+        racer.nitro = clamp(racer.nitro + 62 * capBonus, 0, racer.perf.nitroCapacity);
+        if (racer.isBrokenDown) {
+          racer.integrity = Math.min(racer.maxIntegrity, racer.integrity + 45);
+        }
         if (racer.isPlayer) {
           world.stuntStats.pickupCash += 100;
           recomputeStuntSummary(world.stuntStats);
-          pushPopup(world, events.stuntPopups, 'GOLD NITRO!', 100, 'fuchsia');
+          pushPopup(world, events.stuntPopups, 'GOLD CORE!', 100, 'fuchsia');
         }
       } else if (pickup.kind === 'shield') {
         racer.shieldTimer = 8.5;
@@ -1189,6 +1537,58 @@ function resolveCarCollisionsAndNearMisses(world: RaceWorld, events: RaceStepEve
         const player = a.isPlayer ? a : b.isPlayer ? b : null;
         const rival = a.isPlayer ? b : b.isPlayer ? a : null;
 
+        // Kinetic Collision Damage & Shunt / Shockwave Slam
+        if (!a.isDrowning && !b.isDrowning && !a.eliminated && !b.eliminated) {
+          const relSpeed = Math.abs(a.speed - b.speed);
+          const aBoost = (a.isShockwave ? 2.2 : a.isNitroActive ? 1.35 : 1.0) * (a.shuntTimer > 0 ? 1.65 : 1.0) * (a.combatMod === 'ram_chassis' ? 1.35 : 1.0);
+          const bBoost = (b.isShockwave ? 2.2 : b.isNitroActive ? 1.35 : 1.0) * (b.shuntTimer > 0 ? 1.65 : 1.0) * (b.combatMod === 'ram_chassis' ? 1.35 : 1.0);
+          const baseDmg = 10 + relSpeed * 0.55;
+
+          if (b.respawnImmunityTimer <= 0 && b.shieldTimer <= 0 && !b.isRemotePeer) {
+            const selfRed = b.combatMod === 'ram_chassis' ? 0.8 : 1.0;
+            b.integrity = Math.max(0, b.integrity - baseDmg * aBoost * selfRed);
+            b.lastAttackerId = a.id;
+            if (a.shuntTimer > 0) {
+              b.d += pushSign * 2.8;
+            }
+          }
+          if (a.respawnImmunityTimer <= 0 && a.shieldTimer <= 0 && !a.isRemotePeer) {
+            const selfRed = a.combatMod === 'ram_chassis' ? 0.8 : 1.0;
+            a.integrity = Math.max(0, a.integrity - baseDmg * bBoost * selfRed);
+            a.lastAttackerId = b.id;
+            if (b.shuntTimer > 0) {
+              a.d -= pushSign * 2.8;
+            }
+          }
+
+          if (player && rival && rival.integrity <= 0 && !rival.isBrokenDown) {
+            rival.isBrokenDown = true;
+            rival.nitro = 0;
+            rival.spinoutTimer = 1.25;
+            rival.speed *= 0.42;
+            player.nitro = clamp(player.nitro + 35, 0, player.perf.nitroCapacity);
+            world.stuntStats.takedowns += 1;
+            world.stuntStats.takedownCash += 250;
+            recomputeStuntSummary(world.stuntStats);
+            if (world.mode === 'rampage' && world.rampageTimer !== null) {
+              world.rampageTimer += 8.0;
+              pushPopup(world, events.stuntPopups, '+8s WRECKED RIVAL!', 250, 'rose');
+            } else {
+              pushPopup(world, events.stuntPopups, 'WRECKED RIVAL! +35% NITRO', 250, 'rose');
+            }
+            world.combatBanner = 'WRECKED RIVAL! +35% NITRO & +$250';
+            world.combatBannerTimer = 2.0;
+            events.playerTakedown = true;
+            events.hitStopSec = 0.04;
+          } else if (player && player.integrity <= 0 && !player.isBrokenDown) {
+            player.isBrokenDown = true;
+            player.nitro = 0;
+            player.spinoutTimer = 1.1;
+            world.combatBanner = 'CHASSIS BROKEN DOWN! RECHARGING...';
+            world.combatBannerTimer = 2.4;
+          }
+        }
+
         if (
           player &&
           rival &&
@@ -1196,12 +1596,14 @@ function resolveCarCollisionsAndNearMisses(world: RaceWorld, events: RaceStepEve
           (player.isShockwave ||
             player.isNitroActive ||
             player.shieldTimer > 0 ||
+            player.shuntTimer > 0 ||
             (player.driverPerks.collisionPowerMult > 1.2 && player.speed > rival.speed + 4))
         ) {
           rival.spinoutTimer = 1.4;
           rival.speed *= 0.52;
           if (!rival.isRemotePeer) {
-            rival.d = clamp(rival.d + (rival.d >= player.d ? 2.6 : -2.6), -halfRoad, halfRoad);
+            const maxLateral = world.track.id === 'coastal' ? halfRoad + 2.8 : halfRoad;
+            rival.d = clamp(rival.d + (rival.d >= player.d ? 2.6 : -2.6), -maxLateral, maxLateral);
           }
           player.nitro = clamp(player.nitro + 25, 0, player.perf.nitroCapacity);
           player.boostTimer = Math.max(player.boostTimer, 0.75);
@@ -1210,8 +1612,12 @@ function resolveCarCollisionsAndNearMisses(world: RaceWorld, events: RaceStepEve
           world.stuntStats.takedowns += 1;
           world.stuntStats.takedownCash += takedownCash;
           recomputeStuntSummary(world.stuntStats);
+          if (world.mode === 'rampage' && world.rampageTimer !== null) {
+            world.rampageTimer += 8.0;
+          }
 
           events.playerTakedown = true;
+          events.hitStopSec = Math.max(events.hitStopSec, 0.04);
           pushPopup(world, events.stuntPopups, 'RIVAL TAKEDOWN!', takedownCash, 'rose');
           events.collisions.push({
             type: 'takedown',
@@ -1289,6 +1695,13 @@ export function stepRaceWorld(
     playerShockwaveStarted: false,
     playerNitroEnded: false,
     playerTakedown: false,
+    playerSplashdown: false,
+    playerVerticalTakedown: false,
+    playerOverdriveRestart: false,
+    playerShuntTriggered: false,
+    eliminationBoom: false,
+    empBlastTriggered: false,
+    hitStopSec: 0,
     stuntPopups: [],
   };
 
@@ -1362,6 +1775,131 @@ export function stepRaceWorld(
 
   resolveCarCollisionsAndNearMisses(world, events);
   updatePlaces(world);
+
+  if (world.combatBannerTimer > 0) {
+    world.combatBannerTimer = Math.max(0, world.combatBannerTimer - dt);
+    if (world.combatBannerTimer === 0) {
+      world.combatBanner = null;
+    }
+  }
+
+  // Biome-Specific Dynamic Track Hazards (Drawbridge, Rockslides, EMP Gates)
+  if (world.phase === 'racing') {
+    for (const r of world.racers) {
+      if (r.eliminated || r.isDrowning) continue;
+      if (world.track.id === 'coastal' && r.lap >= 2) {
+        const bridgeS = world.track.totalLength * 0.52;
+        if (Math.abs(signedTrackDelta(r.s, bridgeS, world.track.totalLength)) < 5.5 && !r.isAirborne && r.speed < 58) {
+          r.isDrowning = true;
+          r.waterRecoveryTimer = 2.5;
+          r.vy = -3.0;
+          r.integrity = 0;
+          r.isBrokenDown = true;
+          events.collisions.push({
+            type: 'splashdown',
+            intensity: 1.0,
+            pos: { ...r.worldPos },
+            involvesPlayer: r.isPlayer,
+          });
+        }
+      } else if (world.track.id === 'desert' && !r.isAirborne && !r.isShockwave) {
+        const rockS = world.track.totalLength * 0.44;
+        if (Math.abs(signedTrackDelta(r.s, rockS, world.track.totalLength)) < 3.5 && Math.abs(r.d) < 3.5 && r.respawnImmunityTimer <= 0) {
+          r.speed *= 0.85;
+          r.integrity = Math.max(0, r.integrity - 14 * dt * 10);
+          r.respawnImmunityTimer = 0.6;
+        }
+      } else if (world.track.id === 'night' && !r.isAirborne) {
+        const empS = world.track.totalLength * 0.62;
+        const empActive = Math.sin(world.raceTime * 2.1) > 0.2;
+        if (Math.abs(signedTrackDelta(r.s, empS, world.track.totalLength)) < 3.2 && r.respawnImmunityTimer <= 0) {
+          if (r.isNitroActive || r.isShockwave) {
+            r.nitro = clamp(r.nitro + 20, 0, r.perf.nitroCapacity);
+            r.respawnImmunityTimer = 1.0;
+          } else if (empActive) {
+            r.nitro = Math.max(0, r.nitro - 30);
+            r.speed *= 0.78;
+            r.respawnImmunityTimer = 1.0;
+          }
+        }
+      }
+    }
+
+    // Elimination Mode: 20s countdown eliminates last-place racer
+    if (world.mode === 'elimination' && world.eliminationTimer !== null) {
+      world.eliminationTimer -= effectiveDt;
+      if (world.eliminationTimer <= 0) {
+        const survivors = world.racers.filter((r) => !r.eliminated).sort((a, b) => b.totalDistance - a.totalDistance);
+        if (survivors.length > 1) {
+          const victim = survivors[survivors.length - 1];
+          victim.eliminated = true;
+          victim.integrity = 0;
+          victim.isBrokenDown = true;
+          events.eliminationBoom = true;
+          events.collisions.push({
+            type: 'takedown',
+            intensity: 1.0,
+            pos: { ...victim.worldPos },
+            involvesPlayer: true,
+          });
+          world.combatBanner = `${victim.name.toUpperCase()} ELIMINATED!`;
+          world.combatBannerTimer = 2.2;
+          pushPopup(world, events.stuntPopups, `${victim.name} ELIMINATED!`, 0, 'rose');
+
+          const remaining = survivors.length - 1;
+          if (victim.isPlayer || remaining <= 1) {
+            player.finished = true;
+            player.finishTime = world.raceTime;
+          }
+        }
+        world.eliminationTimer = 20.0;
+      }
+    }
+
+    // Rampage Mode: 90s countdown; rank by takedowns when timer hits 0
+    if (world.mode === 'rampage' && world.rampageTimer !== null) {
+      world.rampageTimer = Math.max(0, world.rampageTimer - effectiveDt);
+      if (world.rampageTimer <= 0 && !player.finished) {
+        player.finished = true;
+        player.finishTime = world.raceTime;
+      }
+    }
+
+    // Police Pursuit Mode: Escalating Heat 1..5, Spike Strips (Heat 2+), EMP Heli Lock-On (Heat 4+)
+    if (world.mode === 'pursuit') {
+      world.heatLevel = clamp(
+        1 + Math.floor(world.stuntStats.takedowns / 2 + world.raceTime / 28),
+        1,
+        5
+      );
+      if (world.heatLevel >= 2 && !player.isAirborne && (player.spikeStripTimer ?? 0) <= 0) {
+        const spikeS = world.track.totalLength * 0.38;
+        if (Math.abs(signedTrackDelta(player.s, spikeS, world.track.totalLength)) < 3.0 && Math.abs(player.d) < 4.5) {
+          player.spikeStripTimer = 5.0;
+          player.speed *= 0.72;
+          world.combatBanner = 'SPIKE STRIP HIT! FIND ENERGY PAD!';
+          world.combatBannerTimer = 2.0;
+        }
+      }
+      if (world.heatLevel >= 4) {
+        if (world.heliLockTimer === null) {
+          world.heliLockTimer = 3.0;
+        } else if (player.isNitroActive || player.isShockwave) {
+          world.heliLockTimer = null;
+        } else {
+          world.heliLockTimer = Math.max(0, world.heliLockTimer - effectiveDt);
+          if (world.heliLockTimer <= 0) {
+            player.empStallTimer = 2.0;
+            player.speed *= 0.55;
+            world.heliLockTimer = null;
+            events.empBlastTriggered = true;
+            world.combatBanner = 'HELI EMP LOCK-ON HIT!';
+            world.combatBannerTimer = 2.0;
+          }
+        }
+      }
+    }
+  }
 
   if (world.phase === 'racing' && player.finished) {
     world.phase = 'slowmo_finish';
@@ -1460,6 +1998,20 @@ export function buildHudTelemetry(
     stuntCash: world.stuntStats.totalStuntCash,
     stuntMultiplier: world.stuntStats.stuntMultiplier,
     takedowns: world.stuntStats.takedowns,
+    integrity: Math.round(player.integrity),
+    maxIntegrity: player.maxIntegrity,
+    isBrokenDown: player.isBrokenDown,
+    breakdownProgress: player.isBrokenDown ? Math.round(player.nitro) : 100,
+    shuntReady: player.shuntCooldown <= 0 && !player.isBrokenDown,
+    eliminationTimer: world.eliminationTimer,
+    rampageTimer: world.rampageTimer,
+    isBossFight: world.isBossFight,
+    bossName: world.bossName,
+    weatherTime: world.weatherTime,
+    combatBanner: world.combatBanner,
+    heatLevel: world.heatLevel,
+    heliLockTimer: world.heliLockTimer,
+    spikeStripActive: (player.spikeStripTimer ?? 0) > 0,
     hasGhost: ghostBestLap !== null,
     ghostBestLap,
     p2Telemetry,
@@ -1590,9 +2142,20 @@ export function finalizeRaceResults(
   const totalCashEarned =
     positionCash + fastestLapCash + stuntStats.totalStuntCash + driverCashBonus + tournamentBonusCash;
 
+  const nextUnlockedCars = [...profile.unlockedCars];
+  if (
+    world.isBossFight &&
+    playerEntry.place === 1 &&
+    world.bossRewardCarId &&
+    !nextUnlockedCars.includes(world.bossRewardCarId)
+  ) {
+    nextUnlockedCars.push(world.bossRewardCarId);
+  }
+
   const updatedProfile: PlayerProfile = {
     ...profile,
     cash: profile.cash + totalCashEarned,
+    unlockedCars: nextUnlockedCars,
     unlockedTournaments: nextUnlockedTournaments,
     trophies: nextTrophies,
     activeTournament: nextActiveTournament,

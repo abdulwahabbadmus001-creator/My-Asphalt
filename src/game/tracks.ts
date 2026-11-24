@@ -233,6 +233,7 @@ export function getTrackData(trackId: TrackId): TrackData {
     length: 13,
     width: 5.2,
     height: 2.35,
+    isBarrelRoll: idx % 2 === 1,
   }));
 
   // 16 On-Track 3D Pickups (Cash Coins, Blue/Gold Nitro Bottles, Impact Shields)

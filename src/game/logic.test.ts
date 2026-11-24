@@ -15,7 +15,15 @@ import {
   TRACK_ORDER,
 } from './catalog';
 import { mapGamepadAxesAndButtons } from './gamepad';
-import { GhostLapRecorder, sampleGhostFrameAtTime } from './ghost';
+import { generateDailyChallenge } from './dailyChallenge';
+import {
+  decodeGhostChallengeCode,
+  encodeGhostChallengeCode,
+  GhostLapRecorder,
+  sampleGhostFrameAtTime,
+} from './ghost';
+import { minifySdp } from './hotspotP2P';
+import { ActionReplayRecorder } from './replay';
 import { decodeSignalPayload, encodeSignalPayload, generateQrMatrix } from './p2p';
 import {
   buildHudTelemetry,
@@ -552,5 +560,113 @@ test('Dynamic adaptive soundtrack scales tempo and synth layers across idle, hig
   assert.ok(nitro.nitroShimmerLayer >= 0.6);
   assert.equal(shockwave.nitroShimmerLayer, 1.0);
 });
+
+test('Elimination mode eliminates last-place racer at 0.0s and resets 20s timer', () => {
+  const profile = createDefaultProfile();
+  const world = createRaceWorld({ mode: 'elimination', trackId: 'coastal', profile });
+  assert.equal(world.eliminationTimer, 20.0);
+  world.phase = 'racing';
+  world.eliminationTimer = 0.02;
+
+  const ev = stepRaceWorld(world, { ...IDLE_INPUT, throttle: true }, 0.05);
+  assert.equal(ev.eliminationBoom, true);
+  const eliminatedCount = world.racers.filter((r) => r.eliminated).length;
+  assert.equal(eliminatedCount, 1);
+  assert.equal(world.eliminationTimer, 20.0);
+});
+
+test('Rampage mode initializes 90s timer and awards +8s on rival wreck takedown', () => {
+  const profile = createDefaultProfile();
+  const world = createRaceWorld({ mode: 'rampage', trackId: 'night', profile });
+  assert.equal(world.rampageTimer, 90.0);
+  world.phase = 'racing';
+
+  const player = getPlayerRacer(world);
+  const rival = world.racers.find((r) => !r.isPlayer)!;
+  player.s = 120;
+  player.d = 0;
+  player.speed = 70;
+  player.isShockwave = true;
+  rival.s = 120.5;
+  rival.d = 0.5;
+  rival.speed = 25;
+  rival.integrity = 10;
+
+  const ev = stepRaceWorld(world, { ...IDLE_INPUT, throttle: true, nitro: true }, 0.04);
+  assert.equal(ev.playerTakedown, true);
+  assert.ok((world.rampageTimer ?? 0) > 95, 'Takedown should add +8s bonus time in Rampage');
+});
+
+test('1v1 Boss Showdown spawns Cup Boss with 115 maxIntegrity and Ghost Challenge Code round-trips', () => {
+  const profile = createDefaultProfile();
+  profile.cash = 10000;
+  const modProfile = buyOrToggleCarToolInProfile(profile, 'civic_gt', 'turbo');
+  const bossWorld = createRaceWorld({
+    mode: 'tournament',
+    trackId: 'coastal',
+    tournamentId: 'rookie_street',
+    raceIndex: 2,
+    profile: modProfile,
+  });
+  assert.equal(bossWorld.isBossFight, true);
+  assert.equal(bossWorld.racers.length, 2);
+  const boss = bossWorld.racers.find((r) => r.isBoss);
+  assert.ok(boss && boss.maxIntegrity === 115);
+
+  const code = encodeGhostChallengeCode({
+    trackId: 'coastal',
+    carId: 'civic_gt',
+    bodyColor: '#00e5ff',
+    lapTime: 44.32,
+    recordedAt: 123456,
+    frames: [
+      { t: 0, s: 10, d: 0, y: 0, yaw: 0, pitch: 0, roll: 0 },
+      { t: 0.1, s: 16, d: 0.2, y: 0, yaw: 0.05, pitch: 0, roll: -0.02 },
+    ],
+  });
+  assert.ok(code.startsWith('MA-GHOST-'));
+  const decoded = decodeGhostChallengeCode(code);
+  assert.ok(decoded !== null);
+  assert.equal(decoded.record.trackId, 'coastal');
+  assert.equal(decoded.record.carId, 'civic_gt');
+  assert.equal(decoded.record.frames.length, 2);
+});
+
+test('Hotspot SDP minifier, Daily Challenge YYYY-MM-DD seeding, Pursuit Heat/Spike Strip, and 30s Replay Ring Buffer', () => {
+  const sampleSdp = [
+    'v=0',
+    'o=- 123 2 IN IP4 127.0.0.1',
+    's=-',
+    't=0 0',
+    'm=application 9 UDP/DTLS/SCTP webrtc-datachannel',
+    'a=ice-ufrag:abcd',
+    'a=ice-pwd:supersecretpassword',
+    'a=extmap-allow-mixed',
+    'a=candidate:1 1 UDP 2122260223 192.168.43.1 54321 typ host',
+  ].join('\r\n');
+  const minified = minifySdp(sampleSdp);
+  assert.ok(minified.includes('a=ice-ufrag:abcd'));
+  assert.ok(minified.includes('a=candidate:1'));
+  assert.ok(!minified.includes('extmap-allow-mixed'));
+
+  const d1 = generateDailyChallenge('2026-11-24');
+  const d2 = generateDailyChallenge('2026-11-24');
+  assert.deepEqual(d1, d2, 'Daily challenge must be deterministic for same YYYY-MM-DD');
+
+  const pursuitWorld = createRaceWorld({ mode: 'pursuit', trackId: 'night', profile: createDefaultProfile() });
+  assert.equal(pursuitWorld.heatLevel, 1);
+  assert.ok(pursuitWorld.racers.some((r) => r.isPolice));
+
+  const recorder = new ActionReplayRecorder();
+  const player = getPlayerRacer(pursuitWorld);
+  for (let i = 0; i < 315; i++) {
+    recorder.record(i * 0.1, [player]);
+  }
+  assert.equal(recorder.getFrames().length, 300, 'Replay ring buffer must cap at 300 frames (30s at 10Hz)');
+  const sampled = recorder.sampleAtOffset(5.0);
+  assert.ok(sampled !== null);
+});
+
+
 
 

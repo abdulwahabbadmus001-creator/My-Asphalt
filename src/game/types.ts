@@ -53,13 +53,57 @@ export type GameScreen =
   | 'race'
   | 'podium';
 
-export type RaceMode = 'quick' | 'tournament' | 'p2p' | 'splitscreen';
+export type RaceMode =
+  | 'quick'
+  | 'tournament'
+  | 'p2p'
+  | 'splitscreen'
+  | 'elimination'
+  | 'rampage'
+  | 'pursuit';
 
-export type CameraMode = 'chase' | 'hood' | 'far';
+export type CameraMode = 'chase' | 'hood' | 'far' | 'bumper';
+
+export type RadioStation = 'afro_log' | 'drift_phonk' | 'cyber_synth' | 'off';
+
+export type DailyMutatorId = 'low_gravity' | 'infinite_shunt' | 'glass_cannon' | 'hyper_charge';
+
+export interface LiveryConfig {
+  stripeStyle: 'none' | 'twin_center' | 'offset_gt' | 'viper';
+  hoodWrap: 'body' | 'carbon' | 'satin_black';
+  roofScoop: boolean;
+  racingNumber: string;
+}
+
+export interface HudLayoutConfig {
+  scale: number;
+  opacity: number;
+  joystickOffset: { x: number; y: number };
+  pedalsOffset: { x: number; y: number };
+}
+
+export interface DriverLifetimeStats {
+  ringOuts: number;
+  wrecks: number;
+  barrelRolls: number;
+  topSpeedKmh: number;
+  policeEscapes: number;
+  bossWins: number;
+}
 
 export type GraphicsQuality = 'low' | 'high';
 
-export type PaintFinish = 'metallic' | 'matte';
+export type PaintFinish = 'metallic' | 'matte' | 'gloss' | 'chameleon';
+
+export type RideHeight = 'stock' | 'lowered' | 'slammed';
+
+export type RimStyle = 'multi_spoke' | 'deep_dish' | 'turbofan';
+
+export type SpoilerStyle = 'lip' | 'gt_wing' | 'swan_neck';
+
+export type CombatModId = 'none' | 'ram_chassis' | 'emp_shockwave' | 'fast_capacitor';
+
+export type WeatherTimeOfDay = 'noon' | 'sunset' | 'storm';
 
 export type UpgradeStatKey = 'topSpeed' | 'acceleration' | 'handling' | 'nitro';
 
@@ -160,6 +204,10 @@ export interface CarCustomization {
   rimColor: string;
   caliperColor: string;
   underglowColor: string; // 'none' or hex string
+  rideHeight?: RideHeight;
+  rimStyle?: RimStyle;
+  spoilerStyle?: SpoilerStyle;
+  livery?: LiveryConfig;
 }
 
 export interface CarBaseStats {
@@ -310,6 +358,8 @@ export interface PlayerProfile {
   upgrades: Record<CarId, UpgradeLevels>;
   ownedTools: Record<CarId, CarToolId[]>;
   equippedTools: Record<CarId, CarToolId[]>;
+  ownedCombatMods?: CombatModId[];
+  equippedCombatMod?: CombatModId;
   customizations: Record<CarId, CarCustomization>;
   unlockedTournaments: TournamentId[];
   trophies: TournamentId[];
@@ -319,6 +369,11 @@ export interface PlayerProfile {
   muted: boolean;
   musicEnabled: boolean;
   touchControlsEnabled: boolean;
+  hapticsEnabled?: boolean;
+  radioStation?: RadioStation;
+  hudLayout?: HudLayoutConfig;
+  dailyMedals?: Record<string, 'bronze' | 'silver' | 'gold'>;
+  lifetimeStats?: DriverLifetimeStats;
 }
 
 export interface InputState {
@@ -328,7 +383,8 @@ export interface InputState {
   right: boolean;
   drift: boolean;
   nitro: boolean;
-  /** Optional smooth analog steering (-1 left .. +1 right) from Bluetooth gamepad */
+  shunt?: boolean;
+  /** Optional smooth analog steering (-1 left .. +1 right) from Bluetooth gamepad or tilt/joystick */
   analogSteer?: number;
   /** Optional progressive gas trigger (0..1) */
   analogThrottle?: number;
@@ -366,6 +422,7 @@ export interface TrackRamp {
   length: number;
   width: number;
   height: number;
+  isBarrelRoll?: boolean;
 }
 
 export interface TrackPickup {
@@ -429,6 +486,33 @@ export interface RacerState {
   isAirborne: boolean;
   currentAirTime: number;
   rampCooldown: number;
+  airSpinAngle: number;
+  airSpinRate: number;
+  airRollAngle: number;
+  airRollRate: number;
+  airRotationsCompleted: number;
+
+  // Combat, Integrity, Breakdown & Energy Recovery
+  integrity: number;
+  maxIntegrity: number;
+  isBrokenDown: boolean;
+  breakdownTimer: number;
+  shuntCooldown: number;
+  shuntTimer: number;
+  shuntDir: number;
+  lastAttackerId: string | null;
+  isDrowning: boolean;
+  waterRecoveryTimer: number;
+  respawnImmunityTimer: number;
+  eliminated: boolean;
+  empStallTimer: number;
+  isBoss?: boolean;
+  isPolice?: boolean;
+  spikeStripTimer?: number;
+  combatMod?: CombatModId;
+  rideHeight?: RideHeight;
+  rimStyle?: RimStyle;
+  spoilerStyle?: SpoilerStyle;
 
   // Articulated vehicle dynamics & combat states
   steerAngle: number;
@@ -473,7 +557,7 @@ export interface RacerState {
 }
 
 export interface RaceCollisionEvent {
-  type: 'wall' | 'car' | 'takedown' | 'smash';
+  type: 'wall' | 'car' | 'takedown' | 'smash' | 'splashdown';
   intensity: number;
   pos: Vec3Like;
   involvesPlayer: boolean;
@@ -492,6 +576,13 @@ export interface RaceStepEvents {
   playerShockwaveStarted: boolean;
   playerNitroEnded: boolean;
   playerTakedown: boolean;
+  playerSplashdown: boolean;
+  playerVerticalTakedown: boolean;
+  playerOverdriveRestart: boolean;
+  playerShuntTriggered: boolean;
+  eliminationBoom: boolean;
+  empBlastTriggered: boolean;
+  hitStopSec: number;
   stuntPopups: StuntPopup[];
 }
 
@@ -594,6 +685,20 @@ export interface HudTelemetry {
   stuntCash: number;
   stuntMultiplier: number;
   takedowns: number;
+  integrity: number;
+  maxIntegrity: number;
+  isBrokenDown: boolean;
+  breakdownProgress: number;
+  shuntReady: boolean;
+  eliminationTimer: number | null;
+  rampageTimer: number | null;
+  isBossFight: boolean;
+  bossName: string | null;
+  weatherTime: WeatherTimeOfDay;
+  combatBanner: string | null;
+  heatLevel?: number;
+  heliLockTimer?: number | null;
+  spikeStripActive?: boolean;
   hasGhost: boolean;
   ghostBestLap: number | null;
   p2Telemetry: SplitPlayerTelemetry | null;
